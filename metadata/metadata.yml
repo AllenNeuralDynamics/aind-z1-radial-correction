@@ -1,0 +1,15 @@
+metadata_version: 1
+name: aind-z1-radial-correction-0.0.1
+description: Image processing capsule to correct radial aberration.
+tags:
+- Z1
+authors:
+- name: Carson Berry
+  affiliations:
+  - name: Allen Institute for Neural Dynamics
+- name: Camilo Laiton
+  affiliations:
+  - name: Allen Institute for Neural Dynamics
+- name: Tim Wang
+  affiliations:
+  - name: Allen Institute for Neural Dynamics
