@@ -350,7 +350,11 @@ def correct_and_save_tile(dataset_loc, output_path, resolution_zyx):
         output_location=output_path,
         code_version=__version__,
         code_url=__url__,
-        parameters={},
+        parameters={
+            'corner_shift': corner_shift,
+            'frac_cutoff': frac_cutoff
+        },
+        # Example for compute resources that we need to track
         # resources=ResourceUsage(
         #     os=OperatingSystem.UBUNTU_20_04,
         #     architecture=CPUArchitecture.X86_64,
