@@ -21,4 +21,5 @@ RUN cd /.code-server \
 RUN pip install -U --no-cache-dir \
     aind-data-transfer[imaging]==0.25.2 \
     kerchunk==0.2.5 \
-    hdf5plugin==5.0.0
+    hdf5plugin==5.0.0 \
+    aind-data-schema==1.4.0

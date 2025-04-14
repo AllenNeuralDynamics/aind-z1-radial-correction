@@ -9,7 +9,6 @@ from math import ceil
 from pathlib import Path
 from threading import Thread
 from typing import Optional, Tuple
-from xml.etree import ElementTree as ET
 
 import dask
 import dask.array as da
@@ -17,6 +16,10 @@ import numpy as np
 import s3fs
 import yaml
 import zarr
+from aind_data_schema.core.processing import (
+    DataProcess,
+    ProcessName,
+)
 from aind_data_transfer.transformations.ome_zarr import (
     _get_bytes,
     downsample_and_store,
@@ -28,9 +31,11 @@ from aind_data_transfer.util.chunk_utils import (
     ensure_shape_5d,
 )
 from aind_data_transfer.util.io_utils import BlockedArrayWriter
-from dask.distributed import Client, LocalCluster, performance_report
-from numpy.typing import ArrayLike
+from dask.distributed import performance_report
 from scipy.ndimage import map_coordinates
+
+from . import __maintainers__, __pipeline_version__, __url__, __version__
+from .utils import utils
 
 logging.basicConfig(format="%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M")
 LOGGER = logging.getLogger(__name__)
@@ -215,17 +220,21 @@ def apply_corr_to_zarr_tile(
     np.ndarray
         The corrected tile.
     """
-    tile = da.from_zarr(zarr_file_loc)
+    tile = da.squeeze(da.from_zarr(zarr_file_loc))
     z_size = tile.shape[2]
 
+    output_radial = None
+
     if z_size < 400:
-        return radial_correction(
-            tile[0, 0].compute(), corner_shift, frac_cutoff
+        output_radial = radial_correction(
+            tile.compute(), corner_shift, frac_cutoff
         )
     else:
-        return radial_correction_2d(
-            tile[0, 0].compute(), corner_shift, frac_cutoff
+        output_radial = radial_correction_2d(
+            tile.compute(), corner_shift, frac_cutoff
         )
+
+    return output_radial
 
 
 def run_multiscale(
@@ -301,8 +310,89 @@ def run_multiscale(
     )
 
 
+# TODO: Improve performance and zarr writing
+def correct_and_save_tile(dataset_loc, output_path, resolution_zyx):
+    """
+    correct and save a single tile
+    """
+
+    tilename = str(Path(output_path).name)
+
+    corner_shift = calculate_corner_shift_from_pixel_size(resolution_zyx[1])
+    frac_cutoff = calculate_frac_cutoff_from_pixel_size(resolution_zyx[1])
+
+    LOGGER.info(f"Corner Shift: {corner_shift} pixels")
+
+    start_time = time.time()
+    corrected_tile = apply_corr_to_zarr_tile(
+        dataset_loc + "/0", corner_shift, frac_cutoff
+    )
+    end_time = time.time()
+
+    with performance_report(filename=f"/results/{tilename}-dask-report.html"):
+
+        zarr_loc = f"/results/{tilename}"
+        zarr.save_array(
+            zarr_loc, corrected_tile
+        )  # slow... consider doing with dask
+        # temp_zarr = zarr.load(zarr_loc)
+        # corr_arr = da.from_array(corrected_tile, name=tilename)
+        # corr_arr = da.from_zarr(zarr_loc, chunks = (128,256,256))
+        # run_multiscale(corr_arr, out_group, resolution_zyx)
+
+    # TODO: Include image radial correction in data schema, it's not there
+    data_process = DataProcess(
+        name=ProcessName.IMAGE_RADIAL_CORRECTION,
+        software_version=__version__,
+        start_date_time=start_time,
+        end_date_time=end_time,
+        input_location=dataset_loc,
+        output_location=output_path,
+        code_version=__version__,
+        code_url=__url__,
+        parameters={},
+        # resources=ResourceUsage(
+        #     os=OperatingSystem.UBUNTU_20_04,
+        #     architecture=CPUArchitecture.X86_64,
+        #     cpu="Intel Core i7",
+        #     cpu_cores=8,
+        #     gpu="NVIDIA GeForce RTX 3080",
+        #     system_memory=32.0,
+        #     system_memory_unit=MemoryUnit.GB,
+        #     ram=16.0,
+        #     ram_unit=MemoryUnit.GB,
+        #     cpu_usage=cpu_usage_list,
+        #     gpu_usage=gpu_usage_list,
+        #     ram_usage=ram_usage_list,
+        # ),
+    )
+
+    return data_process
+
+
 def main():
-    pass
+    """
+    Radial correction to multiple tiles
+    based on provided YMLs.
+    """
+    data_folder = Path(os.path.abspath("../data"))
+    results_folder = Path(os.path.abspath("../results"))
+
+    data_processes = []
+
+    for yml_loc in data_folder.glob("*to_do_radial_correction.yml"):
+        in_path, output_path, resolution_zyx = utils.read_to_do_yml(yml_loc)
+        data_process = correct_and_save_tile(
+            in_path, output_path, resolution_zyx
+        )
+        data_processes.append(data_process)
+
+    utils.generate_processing(
+        data_processes=data_processes,
+        dest_processing=results_folder,
+        processor_full_name=__maintainers__[0],
+        pipeline_version=__pipeline_version__,
+    )
 
 
 if __name__ == "__main__":

@@ -4,9 +4,16 @@ Utility functions for the radial correction step
 
 import os
 from pathlib import Path
+from typing import List
 from xml.etree import ElementTree as ET
 
 import yaml
+from aind_data_schema.core.processing import (
+    DataProcess,
+    PipelineProcess,
+    Processing,
+    ProcessName,
+)
 
 
 def write_s3_path_as_yml(xml_file_loc: str, output_folder: str):
@@ -90,3 +97,50 @@ def read_to_do_yml(yml_loc: str):
         resolution_zyx_um.append(float(res))
 
     return input_path, output_path, resolution_zyx_um
+
+
+def generate_processing(
+    data_processes: List[DataProcess],
+    dest_processing: str,
+    prefix: str,
+    processor_full_name: str,
+    pipeline_version: str,
+):
+    """
+    Generates data description for the output folder.
+
+    Parameters
+    ------------------------
+
+    data_processes: List[dict]
+        List with the processes aplied in the pipeline.
+
+    dest_processing: PathLike
+        Path where the processing file will be placed.
+
+    processor_full_name: str
+        Person in charged of running the pipeline
+        for this data asset
+
+    pipeline_version: str
+        Terastitcher pipeline version
+
+    """
+    # flake8: noqa: E501
+    processing_pipeline = PipelineProcess(
+        data_processes=data_processes,
+        processor_full_name=processor_full_name,
+        pipeline_version=pipeline_version,
+        pipeline_url="",
+        note="Metadata for radial correction",
+    )
+
+    processing = Processing(
+        processing_pipeline=processing_pipeline,
+        notes="This processing only contains metadata about fusion \
+            and needs to be compiled with other steps at the end",
+    )
+
+    processing.write_standard_file(
+        output_directory=dest_processing, prefix=prefix
+    )
