@@ -1,4 +1,6 @@
-# aind-radial-correction
+# aind-z1-radial-correction
+
+Computes radial correction in OMEZarr data coming from the Z1 microscope.
 
 [![License](https://img.shields.io/badge/license-MIT-brightgreen)](LICENSE)
 ![Code Style](https://img.shields.io/badge/code%20style-black-black)
