@@ -8,6 +8,7 @@ import time
 from math import ceil
 from pathlib import Path
 from threading import Thread
+from typing import Optional, Tuple
 from xml.etree import ElementTree as ET
 
 import dask
@@ -71,7 +72,9 @@ def calculate_frac_cutoff_from_pixel_size(XY_pixel_size: float) -> float:
 
 
 def radial_correction(
-    tile_data: np.ndarray, corner_shift: float = 5.5, frac_cutoff: float = 0.5
+    tile_data: np.ndarray,
+    corner_shift: Optional[float] = 5.5,
+    frac_cutoff: Optional[float] = 0.5,
 ) -> np.ndarray:
     """
     Apply 3D radial correction to a tile.
@@ -80,9 +83,10 @@ def radial_correction(
     ----------
     tile_data : np.ndarray
         The 3D tile data (Z, Y, X) to be corrected.
-    corner_shift : float, optional
+    corner_shift : Optional[float]
         The amount of radial shift to apply (default is 5.5).
-    frac_cutoff : float, optional
+
+    frac_cutoff : Optional[float]
         Fraction of the radius to begin applying correction (default is 0.5).
 
     Returns
@@ -128,7 +132,9 @@ def radial_correction(
 
 
 def radial_correction_2d(
-    tile_data: np.ndarray, corner_shift: float = 5.5, frac_cutoff: float = 0.5
+    tile_data: np.ndarray,
+    corner_shift: Optional[float] = 5.5,
+    frac_cutoff: Optional[float] = 0.5,
 ) -> np.ndarray:
     """
     Apply 2D radial correction plane-wise to a tile.
@@ -137,9 +143,11 @@ def radial_correction_2d(
     ----------
     tile_data : np.ndarray
         The 3D tile data (Z, Y, X) to be corrected.
-    corner_shift : float, optional
+
+    corner_shift : Optional[float]
         The amount of radial shift to apply (default is 5.5).
-    frac_cutoff : float, optional
+
+    frac_cutoff : Optional[float]
         Fraction of the radius to begin applying correction (default is 0.5).
 
     Returns
@@ -184,7 +192,9 @@ def radial_correction_2d(
 
 
 def apply_corr_to_zarr_tile(
-    zarr_file_loc: str, corner_shift: float = 5.5, frac_cutoff: float = 0.5
+    zarr_file_loc: str,
+    corner_shift: Optional[float] = 5.5,
+    frac_cutoff: Optional[float] = 0.5,
 ) -> np.ndarray:
     """
     Load a Zarr tile, apply radial correction, and return corrected tile.
@@ -193,9 +203,11 @@ def apply_corr_to_zarr_tile(
     ----------
     zarr_file_loc : str
         Path to the Zarr file containing the tile.
-    corner_shift : float, optional
+
+    corner_shift : Optional[float]
         The amount of shift to apply to corners (default is 5.5).
-    frac_cutoff : float, optional
+
+    frac_cutoff : Optional[float]
         The fractional radius where correction starts (default is 0.5).
 
     Returns
@@ -214,6 +226,79 @@ def apply_corr_to_zarr_tile(
         return radial_correction_2d(
             tile[0, 0].compute(), corner_shift, frac_cutoff
         )
+
+
+def run_multiscale(
+    full_res_arr: dask.array,
+    out_group: zarr.group,
+    voxel_sizes_zyx: Tuple[int],
+    scale_factors: Optional[Tuple[int]] = (2, 2, 2),
+    n_levels: Optional[int] = 5,
+):
+    """
+    Creates a multiscale representation of the
+    full resolution data.
+
+    Parameters
+    ----------
+    full_res_arr: dask.array
+        Lazy array with the full resolution data.
+
+    out_group: zarr.group
+        Output zarr group
+
+    voxel_sizes_zyx: Tuple[int]
+        Voxel sizes in zyx order
+
+    scale_factors: Optional[Tuple[int]]
+        Scale factors for each of the axis.
+        Default: (2, 2, 2)
+
+    n_levels: Optional[int]
+        Number of levels in the multiscale
+        Default: 5
+    """
+
+    if len(voxel_sizes_zyx) != 3:
+        raise ValueError(f"Please, provide the voxel sizes in ZYX order.")
+
+    arr = ensure_array_5d(full_res_arr)
+
+    LOGGER.info(f"input array: {arr}")
+
+    LOGGER.info(f"input array size: {arr.nbytes / 2 ** 20} MiB")
+
+    block_shape = ensure_shape_5d(BlockedArrayWriter.get_block_shape(arr))
+    LOGGER.info(f"block shape: {block_shape}")
+
+    scale_factors = ensure_shape_5d(scale_factors)
+    compressor = None  # blosc.Blosc("zstd", 1, shuffle=blosc.SHUFFLE)
+
+    # Actual Processing
+    t0 = time.time()
+
+    write_ome_ngff_metadata(
+        out_group,
+        arr,
+        out_group.path,
+        n_levels,
+        scale_factors[-3:],
+        voxel_sizes_zyx[-3:],
+        origin=None,
+    )
+
+    store_array(arr, out_group, "0", block_shape, compressor)
+    # out_group.create_dataset("0", data = arr, compressor=compressor, overwrite = True, chunks = (1, 1, 128, 256, 256))
+
+    pyramid = downsample_and_store(
+        arr, out_group, n_levels, scale_factors, block_shape, compressor
+    )
+    write_time = time.time() - t0
+
+    LOGGER.info(
+        f"Finished writing tile.\n"
+        f"Took {write_time}s. {_get_bytes(pyramid) / write_time / (1024 ** 2)} MiB/s"
+    )
 
 
 def main():
