@@ -137,7 +137,7 @@ def generate_processing(
 
     processing = Processing(
         processing_pipeline=processing_pipeline,
-        notes="This processing only contains metadata about fusion \
+        notes="This processing only contains metadata about radial correction \
             and needs to be compiled with other steps at the end",
     )
 
