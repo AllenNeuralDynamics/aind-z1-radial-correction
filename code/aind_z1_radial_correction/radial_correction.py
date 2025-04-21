@@ -3,12 +3,14 @@ Computes radial correction in microscopic data
 """
 
 import logging
+import multiprocessing as mp
 import os
 import time
 from math import ceil
 from pathlib import Path
 from threading import Thread
-from typing import Optional, Tuple, List
+from typing import List, Optional, Tuple
+from xml.etree import ElementTree as ET
 
 import dask
 import dask.array as da
@@ -20,12 +22,26 @@ from aind_data_schema.core.processing import (
     DataProcess,
     ProcessName,
 )
-
-from scipy.ndimage import map_coordinates
-from xml.etree import ElementTree as ET
+from aind_hcr_data_transformation.compress.czi_to_zarr import (
+    create_downsample_dataset,
+    create_spec,
+    write_tasks,
+)
+from aind_hcr_data_transformation.compress.omezarr_metadata import (
+    _get_pyramid_metadata,
+    write_ome_ngff_metadata,
+)
+from aind_hcr_data_transformation.utils.utils import (
+    pad_array_n_d,
+    write_json,
+)
+from dask.diagnostics import ProgressBar
+from dask.distributed import Client, LocalCluster
 from natsort import natsorted
+from scipy.ndimage import map_coordinates
 
 from . import __maintainers__, __pipeline_version__, __url__, __version__
+from .array_to_zarr import convert_array_to_zarr
 from .utils import utils
 
 logging.basicConfig(format="%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M")
@@ -67,12 +83,13 @@ def calculate_frac_cutoff_from_pixel_size(XY_pixel_size: float) -> float:
     return 0.5
 
 
+from concurrent.futures import ThreadPoolExecutor
+from math import ceil
+from typing import Literal, Optional, Union
+
+import numba as nb
 import numpy as np
 from scipy.ndimage import map_coordinates
-from math import ceil
-from typing import Optional, Literal, Union
-import numba as nb
-from concurrent.futures import ThreadPoolExecutor
 
 
 @nb.njit(parallel=True)
@@ -348,11 +365,24 @@ def apply_corr_to_zarr_tile(
     np.ndarray
         The corrected tile.
     """
-    tile = da.squeeze(da.from_zarr(zarr_file_loc))
-    z_size = tile.shape[2]
+    cluster = LocalCluster(
+        n_workers=mp.cpu_count(), threads_per_worker=1, memory_limit="auto"
+    )
+    client = Client(cluster)
+
+    # Explicitly setting threads to do reading (way faster)
+    try:
+        tile_lazy = da.from_zarr(zarr_file_loc).squeeze()
+
+        with ProgressBar():
+            data_in_memory = tile_lazy.compute(scheduler="threads")
+    finally:
+        client.close()
+        cluster.close()
+
+    z_size = tile_lazy.shape[-3]
 
     output_radial = None
-    data_in_memory = tile.compute()
 
     print("Z size: ", z_size, " data shape: ", data_in_memory.shape)
 
@@ -361,18 +391,17 @@ def apply_corr_to_zarr_tile(
             data_in_memory, corner_shift, frac_cutoff  # , mode="3d"
         )
     else:
-        # output_radial = radial_correction_2d(
-        #     data_in_memory, corner_shift, frac_cutoff#, mode="2d"
-        # )
-        print("2d mode!")
-        output_radial = radial_correction_new(
-            tile_data=data_in_memory,
-            corner_shift=5.5,
-            frac_cutoff=0.5,
-            mode="2d",
-            order=1,
-            max_workers=None,
+        output_radial = radial_correction_2d(
+            data_in_memory, corner_shift, frac_cutoff  # , mode="2d"
         )
+        # output_radial = radial_correction_new(
+        #     tile_data=data_in_memory,
+        #     corner_shift=5.5,
+        #     frac_cutoff=0.5,
+        #     mode="2d",
+        #     order=1,
+        #     max_workers=None,
+        # )
 
     return output_radial
 
@@ -592,14 +621,16 @@ def correct_and_save_tile(dataset_loc, output_path, resolution_zyx, scale="0"):
         f"Time to correct a single tile {end_time - start_time} - New shape {corrected_tile.shape}"
     )
 
-    zarr_loc = f"/results/{tilename}_new"
-    zarr.save_array(
-        zarr_loc, corrected_tile
-    )  # slow... consider doing with dask
-    # temp_zarr = zarr.load(zarr_loc)
-    # corr_arr = da.from_array(corrected_tile, name=tilename)
-    # corr_arr = da.from_zarr(zarr_loc, chunks = (128,256,256))
-    # run_multiscale(corr_arr, out_group, resolution_zyx)
+    output_path = f"/results/{tilename}_old.ome.zarr"
+    # output_path = f"test_data/SmartSPIM/{tilename}_new.ome.zarr"
+    convert_array_to_zarr(
+        array=corrected_tile,
+        voxel_size=[1.0] * 3,
+        shard_size=[512] * 3,
+        chunk_size=[128] * 3,
+        output_path=output_path,
+        # bucket_name="aind-msma-morphology-data"
+    )
 
     data_process = None
     # DataProcess(
