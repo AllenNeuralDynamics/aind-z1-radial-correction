@@ -29,7 +29,6 @@ from aind_hcr_data_transformation.compress.omezarr_metadata import (
 )
 from aind_hcr_data_transformation.utils.utils import (
     pad_array_n_d,
-    write_json,
 )
 from dask.diagnostics import ProgressBar
 from dask.distributed import Client, LocalCluster
@@ -79,42 +78,79 @@ def calculate_frac_cutoff_from_pixel_size(XY_pixel_size: float) -> float:
     return 0.5
 
 
+# enables multithreading with prange
 @nb.njit(parallel=True)
 def _compute_coordinates(
     pixels: int, cutoff: float, corner_shift: float, edge: int
 ) -> tuple:
     """
-    Compute radial correction coordinates with Numba acceleration.
+    Computes the coordinates where the
+    pixels will be moved.
 
-    Returns:
-        Tuple of transformed coordinates and new shape dimensions
+    Parameters
+    ----------
+    pixels: int
+        Width or height of the image. It is assumed that the image
+        has the same resolution in XY.
+
+    cutoff: float
+        Radius beyond which distortion is applied.
+
+    corner_shift: float
+        How much to "pull in" corners beyond the cutoff.
+
+    edge: int
+        Number of pixels to crop from each side (e.g., due to interpolation instability).
     """
-    # Create coordinate grid relative to center
-    x = np.arange(pixels) - pixels // 2
-    y = np.arange(pixels) - pixels // 2
-
+    # coords[0] -> y-coordinates relative to center
+    # coords[1] -> x-coordinates relative to center
     coords = np.zeros((2, pixels, pixels), dtype=np.float32)
 
-    # Compute r and angle for each point
-    rmax = np.sqrt(2) * (pixels // 2)
+    # stores the radius of each pixel from the center.
+    r = np.zeros((pixels, pixels), dtype=np.float32)
 
+    # maximum radius from the center (to normalize distortion).
+    rmax = 0.0
+
+    # First pass: calculate centered coordinates and radius for
+    # every pixel in the image, parallelized with prange
     for i in nb.prange(pixels):
         for j in range(pixels):
-            # Calculate radius and angle
-            r = np.sqrt(x[i] ** 2 + y[j] ** 2)
-            angle = np.arctan2(x[i], y[j])
+            # Shifts (i, j) so the origin is at the center.
+            y = i - pixels // 2
+            x = j - pixels // 2
+            coords[0, i, j] = y
+            coords[1, i, j] = x
 
-            # Apply radial correction
-            r_piece = r
-            if r > cutoff:
-                r_piece += (r - cutoff) * corner_shift / (rmax - cutoff)
+            # Calculates the radius from the center.
+            r[i, j] = np.sqrt(x * x + y * y)
 
-            # Store transformed coordinates
-            coords[0, i, j] = r_piece * np.sin(angle)
-            coords[1, i, j] = r_piece * np.cos(angle)
+            # Finds the maximum radius,
+            # rmax, used to normalize the distortion.
+            if r[i, j] > rmax:
+                rmax = r[i, j]
 
-    # Apply shift and crop edges
-    return coords[:, edge:-edge, edge:-edge] + pixels // 2
+    # Second pass: apply radial distortion
+    for i in nb.prange(pixels):
+        for j in range(pixels):
+            r_val = r[i, j]
+            # Y X angle, careful with x y
+            # coords 0 is y, coords 1 is x
+            # Uses arctan2(y, x) to get the angle of the pixel from the center
+            angle = np.arctan2(coords[0, i, j], coords[1, i, j])
+
+            # pixels farther from center than cutoff are pulled outward/inward
+            if r_val > cutoff:
+                r_val += (r_val - cutoff) * corner_shift / (rmax - cutoff)
+
+            coords[0, i, j] = r_val * np.sin(angle)
+            coords[1, i, j] = r_val * np.cos(angle)
+
+    # Crop edges and shift to image space
+    cropped = coords[:, edge:-edge, edge:-edge]
+    cropped += pixels // 2
+
+    return cropped
 
 
 def _process_plane(args):
@@ -157,24 +193,22 @@ def radial_correction(
     np.ndarray
         The corrected tile.
     """
-    # Convert to uint16 once at the beginning to avoid repeated conversions
-    tile_data = np.asarray(tile_data, dtype=np.uint16)
-
     edge = ceil(corner_shift / np.sqrt(2)) + 1
     shape = tile_data.shape
     pixels = shape[1]  # Assume square XY plane
     cutoff = pixels * frac_cutoff
 
-    # Pre-compute transformed coordinates using numba
+    # Compute the warp to transform coordinates using numba
     coords = _compute_coordinates(pixels, cutoff, corner_shift, edge)
 
     # Calculate new shape after edge cropping
     new_shape = np.array(shape) - [0, edge * 2, edge * 2]
+    LOGGER.info(f"New shape: {new_shape} - Mode {mode} - Cutoff: {cutoff}")
 
     # Different processing methods based on mode
     if mode == "2d":
         # Process each z-plane separately in parallel
-        result = np.zeros(new_shape, dtype=np.uint16)
+        result = np.zeros(new_shape, dtype=tile_data.dtype)  # dtype=np.uint16)
 
         # Use ThreadPoolExecutor for parallel processing of z-planes
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -182,6 +216,7 @@ def radial_correction(
             for z, processed_plane in executor.map(
                 lambda args: _process_plane(args), tasks
             ):
+                # print(f"Tile data dtype: {tile_data[z].dtype} - Processed: {processed_plane.dtype}")
                 result[z] = processed_plane
 
         return result
@@ -347,7 +382,7 @@ def apply_corr_to_zarr_tile(
 
     output_radial = None
 
-    print("Z size: ", z_size, " data shape: ", data_in_memory.shape)
+    LOGGER.info(f"Dataset shape {data_in_memory.shape}")
 
     mode = "2d"
 
@@ -363,204 +398,10 @@ def apply_corr_to_zarr_tile(
         max_workers=max_workers,
     )
 
+    # print(f"input radial correction: {data_in_memory.shape} - {data_in_memory.dtype}")
+    # print(f"Output radial correction: {output_radial.shape} - {output_radial.dtype}")
+
     return output_radial
-
-
-def run_multiscale(
-    full_res_arr: dask.array,
-    out_group: zarr.group,
-    voxel_sizes_zyx: Tuple[int],
-    scale_factors: Optional[Tuple[int]] = (2, 2, 2),
-    n_levels: Optional[int] = 5,
-):
-    """
-    Creates a multiscale representation of the
-    full resolution data.
-
-    Parameters
-    ----------
-    full_res_arr: dask.array
-        Lazy array with the full resolution data.
-
-    out_group: zarr.group
-        Output zarr group
-
-    voxel_sizes_zyx: Tuple[int]
-        Voxel sizes in zyx order
-
-    scale_factors: Optional[Tuple[int]]
-        Scale factors for each of the axis.
-        Default: (2, 2, 2)
-
-    n_levels: Optional[int]
-        Number of levels in the multiscale
-        Default: 5
-    """
-
-    if len(voxel_sizes_zyx) != 3:
-        raise ValueError(f"Please, provide the voxel sizes in ZYX order.")
-
-    arr = ensure_array_5d(full_res_arr)
-
-    LOGGER.info(f"input array: {arr}")
-
-    LOGGER.info(f"input array size: {arr.nbytes / 2 ** 20} MiB")
-
-    block_shape = ensure_shape_5d(BlockedArrayWriter.get_block_shape(arr))
-    LOGGER.info(f"block shape: {block_shape}")
-
-    scale_factors = ensure_shape_5d(scale_factors)
-    compressor = None  # blosc.Blosc("zstd", 1, shuffle=blosc.SHUFFLE)
-
-    # Actual Processing
-    t0 = time.time()
-
-    write_ome_ngff_metadata(
-        out_group,
-        arr,
-        out_group.path,
-        n_levels,
-        scale_factors[-3:],
-        voxel_sizes_zyx[-3:],
-        origin=None,
-    )
-
-    store_array(arr, out_group, "0", block_shape, compressor)
-    # out_group.create_dataset("0", data = arr, compressor=compressor, overwrite = True, chunks = (1, 1, 128, 256, 256))
-
-    pyramid = downsample_and_store(
-        arr, out_group, n_levels, scale_factors, block_shape, compressor
-    )
-    write_time = time.time() - t0
-
-    LOGGER.info(
-        f"Finished writing tile.\n"
-        f"Took {write_time}s. {_get_bytes(pyramid) / write_time / (1024 ** 2)} MiB/s"
-    )
-
-
-def store_zarrv2(
-    image_data,
-    stack_name,
-    output_path,
-    final_chunksize,
-    scale_factor=[2, 2, 2],
-    n_lvls=5,
-    channel_colors=[None],
-):
-
-    # Rechunking dask array
-    image_data = image_data.rechunk()
-    image_data = pad_array_n_d(arr=image_data)
-
-    image_name = stack_name
-
-    print(f"Writing {image_data} from {stack_name} to {output_path}")
-
-    # Creating Zarr dataset
-    store = parse_url(path=output_path, mode="w").store
-    root_group = zarr.group(store=store)
-
-    # Using 1 thread since is in single machine.
-    # Avoiding the use of multithreaded due to GIL
-
-    if np.issubdtype(image_data.dtype, np.integer):
-        np_info_func = np.iinfo
-
-    else:
-        # Floating point
-        np_info_func = np.finfo
-
-    # Getting min max metadata for the dtype
-    channel_minmax = [
-        (
-            np_info_func(image_data.dtype).min,
-            np_info_func(image_data.dtype).max,
-        )
-        for _ in range(image_data.shape[1])
-    ]
-
-    # Setting values for SmartSPIM
-    # Ideally we would use da.percentile(image_data, (0.1, 95))
-    # However, it would take so much time and resources and it is
-    # not used that much on neuroglancer
-    channel_startend = [(0.0, 350.0) for _ in range(image_data.shape[1])]
-
-    new_channel_group = root_group.create_group(
-        name=image_name, overwrite=True
-    )
-
-    # Making sure the voxel size and scale are floats
-    voxel_size = [float(v) for v in voxel_size]
-    scale_factor = [float(s) for s in scale_factor]
-
-    # Writing OME-NGFF metadata
-    write_ome_ngff_metadata(
-        group=new_channel_group,
-        arr=image_data,
-        image_name=image_name,
-        n_lvls=n_lvls,
-        scale_factors=scale_factor,
-        voxel_size=voxel_size,
-        channel_minmax=channel_minmax,
-        channel_startend=channel_startend,
-        metadata=_get_pyramid_metadata(),
-    )
-
-    # performance_report_path = f"{output_path}/report_{stack_name}.html"
-
-    start_time = time.time()
-    # Writing zarr and performance report
-    # with performance_report(filename=performance_report_path):
-
-    # Writing zarr
-    block_shape = list(
-        BlockedArrayWriter.get_block_shape(
-            arr=image_data, target_size_mb=12800  # 51200,
-        )
-    )
-
-    # Formatting to 5D block shape
-    block_shape = ([1] * (5 - len(block_shape))) + block_shape
-    written_pyramid = []
-    pyramid_group = None
-
-    for level in range(n_lvls):
-        if not level:
-            array_to_write = image_data
-
-        else:
-            # It's faster to write the scale and then read it back
-            # to compute the next scale
-            previous_scale = da.from_zarr(pyramid_group, pyramid_group.chunks)
-            new_scale_factor = (
-                [1] * (len(previous_scale.shape) - len(scale_factor))
-            ) + scale_factor
-
-            previous_scale_pyramid, _ = compute_pyramid(
-                data=previous_scale,
-                scale_axis=new_scale_factor,
-                chunks=image_data.chunksize,
-                n_lvls=2,
-            )
-            array_to_write = previous_scale_pyramid[-1]
-
-        logger.info(f"[level {level}]: pyramid level: {array_to_write}")
-
-        # Create the scale dataset
-        pyramid_group = new_channel_group.create_dataset(
-            name=level,
-            shape=array_to_write.shape,
-            chunks=array_to_write.chunksize,
-            dtype=array_to_write.dtype,
-            compressor=writing_options,
-            dimension_separator="/",
-            overwrite=True,
-        )
-
-        # Block Zarr Writer
-        BlockedArrayWriter.store(array_to_write, pyramid_group, block_shape)
-        written_pyramid.append(array_to_write)
 
 
 # TODO: Improve performance and zarr writing
@@ -580,17 +421,18 @@ def correct_and_save_tile(
     frac_cutoff = calculate_frac_cutoff_from_pixel_size(resolution_zyx[1])
 
     LOGGER.info(f"Corner Shift: {corner_shift} pixels")
+    LOGGER.info(f"Fraction Cutoff: {frac_cutoff}")
 
     start_time = time.time()
     corrected_tile = apply_corr_to_zarr_tile(
         dataset_loc, scale, corner_shift, frac_cutoff
     )
     end_time = time.time()
-    print(
-        f"Time to correct a single tile {end_time - start_time} - New shape {corrected_tile.shape}"
+    LOGGER.info(
+        f"Time to correct {tilename} {end_time - start_time} seconds -> New shape {corrected_tile.shape}"
     )
 
-    output_path = f"/results/{tilename}_old.ome.zarr"
+    output_path = f"/results/{tilename}.zarr"
     # output_path = f"test_data/SmartSPIM/{tilename}_new.ome.zarr"
     convert_array_to_zarr(
         array=corrected_tile,
@@ -691,7 +533,6 @@ def main():
             output_path=output_path,
             resolution_zyx=zyx_voxel_size,
         )
-        s
 
     # utils.generate_processing(
     #     data_processes=data_processes,
