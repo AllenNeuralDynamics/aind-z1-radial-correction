@@ -14,5 +14,6 @@ COPY git-askpass /
 RUN pip install -U --no-cache-dir \
     git+https://github.com/AllenNeuralDynamics/aind-hcr-data-transformation.git@dev \
     aind-data-schema==1.4.0 \
+    numcodecs==0.15.1 \
     numba==0.61.2 \
     jupyterlab

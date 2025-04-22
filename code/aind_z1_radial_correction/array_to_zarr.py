@@ -16,7 +16,6 @@ from aind_hcr_data_transformation.compress.omezarr_metadata import (
     write_ome_ngff_metadata,
 )
 from aind_hcr_data_transformation.utils.utils import (
-    czi_block_generator,
     pad_array_n_d,
     write_json,
 )
@@ -70,6 +69,9 @@ def convert_array_to_zarr(
     channel_startend = [(0.0, 550.0) for _ in range(dataset_shape[1])]
 
     # Writing OME-NGFF metadata
+    scale_factor = [float(s) for s in scale_factor]
+    voxel_size = [float(v) for v in voxel_size]
+
     multiscale_zarr_json = write_ome_ngff_metadata(
         arr_shape=dataset_shape,
         image_name=stack_name,
@@ -96,7 +98,6 @@ def convert_array_to_zarr(
         compressor_kwargs=compressor_kwargs,
     )
 
-    tasks = []
     dataset = ts.open(spec).result()
 
     dataset.write(pad_array_n_d(array)).result()
@@ -123,9 +124,11 @@ def convert_array_to_zarr(
 if __name__ == "__main__":
     import dask.array as da
 
-    dataset = da.from_zarr(
-        "/data/HCR_785830_2025-03-19_17-00-00/SPIM/Tile_X_0000_Y_0011_Z_0000_ch_488.ome.zarr/0"
-    ).compute()
+    BASE_PATH = "/data"
+    test_dataset = "HCR_785830_2025-03-19_17-00-00/SPIM/Tile_X_0000_Y_0011_Z_0000_ch_488.ome.zarr"
+    scale = "0"
+
+    dataset = da.from_zarr(f"{BASE_PATH}/{test_dataset}/{scale}").compute()
     convert_array_to_zarr(
         array=dataset,
         voxel_size=[1.0] * 3,

@@ -1,6 +1,6 @@
 """Z1 radial correction."""
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 __authors__ = ["Carson Berry", "Camilo Laiton", "Tim Wang"]
 __author_emails__ = [
     "carson.berry@alleninstitute.org",

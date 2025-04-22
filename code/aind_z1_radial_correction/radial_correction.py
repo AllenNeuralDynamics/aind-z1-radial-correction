@@ -2,30 +2,26 @@
 Computes radial correction in microscopic data
 """
 
+import asyncio
 import logging
 import multiprocessing as mp
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from math import ceil
 from pathlib import Path
-from threading import Thread
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple, Union
 from xml.etree import ElementTree as ET
 
 import dask
 import dask.array as da
+import numba as nb
 import numpy as np
-import s3fs
-import yaml
+import tensorstore as ts
 import zarr
 from aind_data_schema.core.processing import (
     DataProcess,
     ProcessName,
-)
-from aind_hcr_data_transformation.compress.czi_to_zarr import (
-    create_downsample_dataset,
-    create_spec,
-    write_tasks,
 )
 from aind_hcr_data_transformation.compress.omezarr_metadata import (
     _get_pyramid_metadata,
@@ -83,15 +79,6 @@ def calculate_frac_cutoff_from_pixel_size(XY_pixel_size: float) -> float:
     return 0.5
 
 
-from concurrent.futures import ThreadPoolExecutor
-from math import ceil
-from typing import Literal, Optional, Union
-
-import numba as nb
-import numpy as np
-from scipy.ndimage import map_coordinates
-
-
 @nb.njit(parallel=True)
 def _compute_coordinates(
     pixels: int, cutoff: float, corner_shift: float, edge: int
@@ -139,7 +126,7 @@ def _process_plane(args):
     return z, map_coordinates(plane, warp_coords, order=order, mode="constant")
 
 
-def radial_correction_new(
+def radial_correction(
     tile_data: np.ndarray,
     corner_shift: Optional[float] = 5.5,
     frac_cutoff: Optional[float] = 0.5,
@@ -221,150 +208,30 @@ def radial_correction_new(
         )
 
 
-def radial_correction(
-    tile_data: np.ndarray,
-    corner_shift: Optional[float] = 5.5,
-    frac_cutoff: Optional[float] = 0.5,
-) -> np.ndarray:
+def read_zarr(
+    dataset_path: str,
+    compute: Optional[bool] = True,
+) -> Tuple:
     """
-    Apply 3D radial correction to a tile.
+    Reads a zarr dataset
 
     Parameters
     ----------
-    tile_data : np.ndarray
-        The 3D tile data (Z, Y, X) to be corrected.
-    corner_shift : Optional[float]
-        The amount of radial shift to apply (default is 5.5).
+    dataset_path: str
+        Path where the dataset is stored.
 
-    frac_cutoff : Optional[float]
-        Fraction of the radius to begin applying correction (default is 0.5).
-
-    Returns
-    -------
-    np.ndarray
-        The corrected tile.
-    """
-    edge = ceil(corner_shift / np.sqrt(2)) + 1
-    shape = tile_data.shape
-    pixels = shape[1]  # Assume square XY plane
-    cutoff = pixels * frac_cutoff
-    img = np.zeros(shape, np.uint16)
-
-    def read(src):
-        img[:] = np.array(src, np.uint16)
-
-    t = Thread(target=read, args=(tile_data,))
-    t.start()
-
-    grid = np.meshgrid(np.arange(pixels), np.arange(pixels), indexing="ij")
-    coords = (np.array(grid) - pixels // 2).astype(np.float32)
-
-    r = np.sqrt((coords**2).sum(0))
-    angle = np.arctan2(coords[0], coords[1])
-    rmax = r.max()
-    r_piece = r + (r > cutoff) * (r - cutoff) * corner_shift / (rmax - cutoff)
-
-    coords[0], coords[1] = r_piece * np.sin(angle), r_piece * np.cos(angle)
-    coords = np.array(
-        coords[:, edge:-edge, edge:-edge] + pixels // 2, np.float32
-    )
-
-    new_shape = np.array(img.shape) - [0, edge * 2, edge * 2]
-    warp_coords = np.meshgrid(
-        *[np.arange(x).astype(np.int32) for x in new_shape], indexing="ij"
-    )
-    warp_coords = np.array(warp_coords, dtype=np.float32)
-    warp_coords[1] = coords[0][None, ...]
-    warp_coords[2] = coords[1][None, ...]
-
-    t.join()
-    return map_coordinates(img, warp_coords, order=1, mode="constant")
-
-
-def radial_correction_2d(
-    tile_data: np.ndarray,
-    corner_shift: Optional[float] = 5.5,
-    frac_cutoff: Optional[float] = 0.5,
-) -> np.ndarray:
-    """
-    Apply 2D radial correction plane-wise to a tile.
-
-    Parameters
-    ----------
-    tile_data : np.ndarray
-        The 3D tile data (Z, Y, X) to be corrected.
-
-    corner_shift : Optional[float]
-        The amount of radial shift to apply (default is 5.5).
-
-    frac_cutoff : Optional[float]
-        Fraction of the radius to begin applying correction (default is 0.5).
+    compute: Optional[bool]
+        Computes the lazy dask graph.
+        Default: True
 
     Returns
     -------
-    np.ndarray
-        The corrected tile.
+    Tuple[ArrayLike, da.Array]
+        ArrayLike or None if compute is false
+        Lazy dask array
     """
-    edge = ceil(corner_shift / np.sqrt(2)) + 1
-    shape = tile_data.shape
-    pixels = shape[1]
-    cutoff = pixels * frac_cutoff
+    tile = None
 
-    grid = np.meshgrid(np.arange(pixels), np.arange(pixels), indexing="ij")
-    coords = (np.array(grid) - pixels // 2).astype(np.float32)
-
-    r = np.sqrt((coords**2).sum(0))
-    angle = np.arctan2(coords[0], coords[1])
-    rmax = r.max()
-    r_piece = r + (r > cutoff) * (r - cutoff) * corner_shift / (rmax - cutoff)
-
-    coords[0], coords[1] = r_piece * np.sin(angle), r_piece * np.cos(angle)
-    coords = np.array(
-        coords[:, edge:-edge, edge:-edge] + pixels // 2, np.float32
-    )
-
-    new_shape = np.array(shape) - [0, edge * 2, edge * 2]
-    img = np.zeros(new_shape, np.uint16)
-
-    warp_coords = np.meshgrid(
-        np.arange(new_shape[1]), np.arange(new_shape[2]), indexing="ij"
-    )
-    warp_coords = np.array(warp_coords, dtype=np.float32)
-    warp_coords[0] = coords[0][None]
-    warp_coords[1] = coords[1][None]
-
-    for z in range(tile_data.shape[0]):
-        img[z] = map_coordinates(
-            tile_data[z], warp_coords, order=1, mode="constant"
-        )
-
-    return img
-
-
-def apply_corr_to_zarr_tile(
-    zarr_file_loc: str,
-    corner_shift: Optional[float] = 5.5,
-    frac_cutoff: Optional[float] = 0.5,
-) -> np.ndarray:
-    """
-    Load a Zarr tile, apply radial correction, and return corrected tile.
-
-    Parameters
-    ----------
-    zarr_file_loc : str
-        Path to the Zarr file containing the tile.
-
-    corner_shift : Optional[float]
-        The amount of shift to apply to corners (default is 5.5).
-
-    frac_cutoff : Optional[float]
-        The fractional radius where correction starts (default is 0.5).
-
-    Returns
-    -------
-    np.ndarray
-        The corrected tile.
-    """
     cluster = LocalCluster(
         n_workers=mp.cpu_count(), threads_per_worker=1, memory_limit="auto"
     )
@@ -372,36 +239,129 @@ def apply_corr_to_zarr_tile(
 
     # Explicitly setting threads to do reading (way faster)
     try:
-        tile_lazy = da.from_zarr(zarr_file_loc).squeeze()
+        tile_lazy = da.from_zarr(dataset_path).squeeze()
 
-        with ProgressBar():
-            data_in_memory = tile_lazy.compute(scheduler="threads")
+        if compute:
+            with ProgressBar():
+                tile = tile_lazy.compute(scheduler="threads")
     finally:
         client.close()
         cluster.close()
 
-    z_size = tile_lazy.shape[-3]
+    return tile, tile_lazy
+
+
+async def read_zarr_tensorstore(
+    dataset_path: str, scale: str, driver: Optional[str] = "zarr"
+) -> Tuple:
+    """
+    Reads a zarr dataset
+
+    Parameters
+    ----------
+    dataset_path: str
+        Path where the dataset is stored.
+
+    scale: str
+        Multiscale to load
+
+    driver: Optional[str]
+        Tensorstore driver
+        Default: zarr
+
+    Returns
+    -------
+    Tuple[ArrayLike, da.Array]
+        ArrayLike or None if compute is false
+        Lazy dask array
+    """
+    ts_spec = {
+        "driver": str(driver),
+        "kvstore": {
+            "driver": "file",
+            "path": str(dataset_path),
+        },
+        "path": str(scale),
+    }
+
+    tile_lazy = await ts.open(ts_spec)
+    tile = await tile_lazy.read()
+
+    return tile, tile_lazy
+
+
+def apply_corr_to_zarr_tile(
+    dataset_path: str,
+    scale: str,
+    corner_shift: Optional[float] = 5.5,
+    frac_cutoff: Optional[float] = 0.5,
+    z_size_threshold: Optional[int] = 400,
+    order: Optional[int] = 1,
+    max_workers: Optional[int] = None,
+) -> np.ndarray:
+    """
+    Load a Zarr tile, apply radial correction, and return corrected tile.
+
+    Parameters
+    ----------
+    dataset_path : str
+        Path to the Zarr file containing the tile.
+
+    scale: str
+        Multiscale to load the data
+
+    corner_shift : Optional[float]
+        The amount of shift to apply to corners (default is 5.5).
+
+    frac_cutoff : Optional[float]
+        The fractional radius where correction starts (default is 0.5).
+
+    z_size_threshold: Optional[int]
+        Threshold in which 3D radial correction is applied.
+
+    order: Optional[int]
+        Interpolation order.
+        Default: 1
+
+    max_workers: Optional[int]
+        Max number of workers.
+        Default: None
+
+    Returns
+    -------
+    np.ndarray
+        The corrected tile.
+    """
+    if z_size_threshold < 0:
+        raise ValueError(
+            f"Please, provide a correct threshold: {z_size_threshold}"
+        )
+
+    # Reading zarr dataset
+    data_in_memory, lazy_array = asyncio.run(
+        read_zarr_tensorstore(dataset_path, scale=scale, driver="zarr")
+    )
+    # data_in_memory, lazy_array = read_zarr(f"{dataset_path}/{scale}", compute=True)
+    data_in_memory = data_in_memory.squeeze()
+    z_size = data_in_memory.shape[-3]
 
     output_radial = None
 
     print("Z size: ", z_size, " data shape: ", data_in_memory.shape)
 
-    if z_size < 400:
-        output_radial = radial_correction(
-            data_in_memory, corner_shift, frac_cutoff  # , mode="3d"
-        )
-    else:
-        output_radial = radial_correction_2d(
-            data_in_memory, corner_shift, frac_cutoff  # , mode="2d"
-        )
-        # output_radial = radial_correction_new(
-        #     tile_data=data_in_memory,
-        #     corner_shift=5.5,
-        #     frac_cutoff=0.5,
-        #     mode="2d",
-        #     order=1,
-        #     max_workers=None,
-        # )
+    mode = "2d"
+
+    if z_size < z_size_threshold:
+        mode = "3d"
+
+    output_radial = radial_correction(
+        tile_data=data_in_memory,
+        corner_shift=corner_shift,
+        frac_cutoff=frac_cutoff,
+        mode=mode,
+        order=order,
+        max_workers=max_workers,
+    )
 
     return output_radial
 
@@ -530,6 +490,10 @@ def store_zarrv2(
         name=image_name, overwrite=True
     )
 
+    # Making sure the voxel size and scale are floats
+    voxel_size = [float(v) for v in voxel_size]
+    scale_factor = [float(s) for s in scale_factor]
+
     # Writing OME-NGFF metadata
     write_ome_ngff_metadata(
         group=new_channel_group,
@@ -600,7 +564,12 @@ def store_zarrv2(
 
 
 # TODO: Improve performance and zarr writing
-def correct_and_save_tile(dataset_loc, output_path, resolution_zyx, scale="0"):
+def correct_and_save_tile(
+    dataset_loc,
+    output_path,
+    resolution_zyx,
+    scale="0",
+):
     """
     correct and save a single tile
     """
@@ -614,7 +583,7 @@ def correct_and_save_tile(dataset_loc, output_path, resolution_zyx, scale="0"):
 
     start_time = time.time()
     corrected_tile = apply_corr_to_zarr_tile(
-        dataset_loc.joinpath(scale), corner_shift, frac_cutoff
+        dataset_loc, scale, corner_shift, frac_cutoff
     )
     end_time = time.time()
     print(
@@ -625,7 +594,7 @@ def correct_and_save_tile(dataset_loc, output_path, resolution_zyx, scale="0"):
     # output_path = f"test_data/SmartSPIM/{tilename}_new.ome.zarr"
     convert_array_to_zarr(
         array=corrected_tile,
-        voxel_size=[1.0] * 3,
+        voxel_size=resolution_zyx,
         shard_size=[512] * 3,
         chunk_size=[128] * 3,
         output_path=output_path,
@@ -633,6 +602,7 @@ def correct_and_save_tile(dataset_loc, output_path, resolution_zyx, scale="0"):
     )
 
     data_process = None
+    # TODO: activate this when aind-data-schema 2.0 is out
     # DataProcess(
     #     name=ProcessName.IMAGE_RADIAL_CORRECTION,
     #     software_version=__version__,
