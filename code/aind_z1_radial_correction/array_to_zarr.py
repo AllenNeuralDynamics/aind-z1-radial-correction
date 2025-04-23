@@ -125,7 +125,8 @@ if __name__ == "__main__":
     import dask.array as da
 
     BASE_PATH = "/data"
-    test_dataset = "HCR_785830_2025-03-19_17-00-00/SPIM/Tile_X_0000_Y_0011_Z_0000_ch_488.ome.zarr"
+    tilename = "Tile_X_0000_Y_0011_Z_0000_ch_488.ome.zarr"
+    test_dataset = f"HCR_785830_2025-03-19_17-00-00/SPIM/{tilename}"
     scale = "0"
 
     dataset = da.from_zarr(f"{BASE_PATH}/{test_dataset}/{scale}").compute()

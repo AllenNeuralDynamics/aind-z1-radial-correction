@@ -13,22 +13,13 @@ from pathlib import Path
 from typing import List, Literal, Optional, Tuple, Union
 from xml.etree import ElementTree as ET
 
-import dask
 import dask.array as da
 import numba as nb
 import numpy as np
 import tensorstore as ts
-import zarr
 from aind_data_schema.core.processing import (
     DataProcess,
     ProcessName,
-)
-from aind_hcr_data_transformation.compress.omezarr_metadata import (
-    _get_pyramid_metadata,
-    write_ome_ngff_metadata,
-)
-from aind_hcr_data_transformation.utils.utils import (
-    pad_array_n_d,
 )
 from dask.diagnostics import ProgressBar
 from dask.distributed import Client, LocalCluster
@@ -415,11 +406,10 @@ def correct_and_save_tile(
     correct and save a single tile
     """
 
-    tilename = str(Path(output_path).name)
-
     corner_shift = calculate_corner_shift_from_pixel_size(resolution_zyx[1])
     frac_cutoff = calculate_frac_cutoff_from_pixel_size(resolution_zyx[1])
 
+    LOGGER.info(f"Input: {dataset_loc} - Output: {output_path}")
     LOGGER.info(f"Corner Shift: {corner_shift} pixels")
     LOGGER.info(f"Fraction Cutoff: {frac_cutoff}")
 
@@ -429,17 +419,15 @@ def correct_and_save_tile(
     )
     end_time = time.time()
     LOGGER.info(
-        f"Time to correct {tilename} {end_time - start_time} seconds -> New shape {corrected_tile.shape}"
+        f"Time to correct: {end_time - start_time} seconds -> New shape {corrected_tile.shape}"
     )
 
-    output_path = f"/results/{tilename}.zarr"
-    # output_path = f"test_data/SmartSPIM/{tilename}_new.ome.zarr"
     convert_array_to_zarr(
         array=corrected_tile,
         voxel_size=resolution_zyx,
         shard_size=[512] * 3,
         chunk_size=[128] * 3,
-        output_path=output_path,
+        output_path=str(output_path),
         # bucket_name="aind-msma-morphology-data"
     )
 
@@ -526,13 +514,18 @@ def main():
     data_processes = []
     zarr_paths = natsorted(list(data_folder.glob("*.zarr")))
 
+    picked = [
+        "Tile_X_0000_Y_0001_Z_0000_ch_488.ome.zarr",
+        "Tile_X_0000_Y_0002_Z_0000_ch_488.ome.zarr",
+    ]
     for zarr_path in zarr_paths:
-        output_path = results_folder.joinpath(zarr_path.stem)
-        data_process = correct_and_save_tile(
-            dataset_loc=zarr_path,
-            output_path=output_path,
-            resolution_zyx=zyx_voxel_size,
-        )
+        if zarr_path.name in picked:
+            output_path = results_folder.joinpath(zarr_path.name)
+            data_process = correct_and_save_tile(
+                dataset_loc=zarr_path,
+                output_path=output_path,
+                resolution_zyx=zyx_voxel_size,
+            )
 
     # utils.generate_processing(
     #     data_processes=data_processes,
