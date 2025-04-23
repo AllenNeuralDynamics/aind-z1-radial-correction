@@ -100,9 +100,6 @@ def _compute_coordinates(
     # stores the radius of each pixel from the center.
     r = np.zeros((pixels, pixels), dtype=np.float32)
 
-    # maximum radius from the center (to normalize distortion).
-    rmax = 0.0
-
     # First pass: calculate centered coordinates and radius for
     # every pixel in the image, parallelized with prange
     for i in nb.prange(pixels):
@@ -116,12 +113,14 @@ def _compute_coordinates(
             # Calculates the radius from the center.
             r[i, j] = np.sqrt(x * x + y * y)
 
-            # Finds the maximum radius,
-            # rmax, used to normalize the distortion.
-            if r[i, j] > rmax:
-                rmax = r[i, j]
+    # Finds the maximum radius,
+    # rmax, used to normalize the distortion.
+    rmax = r.max()
 
     # Second pass: apply radial distortion
+    r_piece = np.zeros_like(r)
+    angles = np.zeros_like(r)
+
     for i in nb.prange(pixels):
         for j in range(pixels):
             r_val = r[i, j]
@@ -134,11 +133,14 @@ def _compute_coordinates(
             if r_val > cutoff:
                 r_val += (r_val - cutoff) * corner_shift / (rmax - cutoff)
 
+            r_piece[i, j] = r_val
+            angles[i, j] = angle
             coords[0, i, j] = r_val * np.sin(angle)
             coords[1, i, j] = r_val * np.cos(angle)
 
     # Crop edges and shift to image space
     cropped = coords[:, edge:-edge, edge:-edge]
+
     cropped += pixels // 2
 
     return cropped
@@ -151,6 +153,75 @@ def _process_plane(args):
     warp_coords[0] = coords[0]
     warp_coords[1] = coords[1]
     return z, map_coordinates(plane, warp_coords, order=order, mode="constant")
+
+
+def radial_correction_2d(tile_data, corner_shift=5.5, frac_cutoff=0.5):
+    """This code is adapted from Tim Wang
+
+    It is intended to perform radial correction on tiles (to remove lens artifacts) for tiff files.
+    It is being further modified to perform this same function on zarr files.
+
+    Parameters:
+    -------------------
+    tile_data: np.ndarray
+        The tile data to be corrected.
+    corner_shift: float
+        The amount of shift to be applied to the corners of the image.
+    frac_cutoff: float
+        The fraction of the image to be cut off.
+
+    Returns:
+    -------------------
+    img.get(): np.ndarray
+        The corrected image of tile_data
+
+
+    """
+
+    edge = ceil(corner_shift / (2**0.5)) + 1
+
+    # fn = str(np.load(sys.argv[2]))
+    # fn = str(tile_location)
+    shape = tile_data.shape
+    # print(f'tile shape {shape}')
+    pixels = shape[1]  # assume X = Y
+    cutoff = pixels * frac_cutoff
+    img = np.zeros(shape, np.uint16)
+
+    grid = np.array(
+        np.meshgrid(np.arange(pixels), np.arange(pixels), indexing="ij")
+    )
+    coords = (grid - pixels // 2).astype(np.float32)
+
+    r = np.sqrt((coords**2).sum(0))
+
+    angle = np.arctan2(coords[0], coords[1])
+
+    rmax = r.max()
+
+    r_piece = r + (r > cutoff) * (r - cutoff) * corner_shift / (
+        rmax - cutoff
+    )  # piecewise linear
+
+    coords[0], coords[1] = r_piece * np.sin(angle), r_piece * np.cos(angle)
+    coords = np.array(
+        coords[:, edge:-edge, edge:-edge] + pixels // 2, np.float32
+    )
+
+    new_s = np.array(img.shape) - [0, edge * 2, edge * 2]
+
+    arange_list = [np.arange(x).astype(np.int32) for x in new_s]
+    warp_coords = np.array(np.meshgrid(*arange_list[1:], indexing="ij"))
+
+    warp_coords[0] = coords[0][None, ...]
+    warp_coords[1] = coords[1][None, ...]
+
+    img = np.zeros(new_s, np.uint16)
+    for z in range(tile_data.shape[0]):
+        img[z] = map_coordinates(
+            tile_data[z], warp_coords, order=1, mode="constant"
+        )
+    return img
 
 
 def radial_correction(
@@ -198,6 +269,8 @@ def radial_correction(
 
     # Different processing methods based on mode
     if mode == "2d":
+        # result = radial_correction_2d(tile_data, corner_shift=5.5, frac_cutoff=0.5)
+        # return result
         # Process each z-plane separately in parallel
         result = np.zeros(new_shape, dtype=tile_data.dtype)  # dtype=np.uint16)
 
@@ -493,19 +566,33 @@ def get_voxelsize_from_xml(stitching_xml_path: str) -> List[str]:
     return zyx_voxelsize_list
 
 
-def main():
+def main(
+    data_folder: str,
+    results_folder: str,
+    stitching_xml_path: str,
+    tilenames: List[str],
+):
     """
     Radial correction to multiple tiles
     based on provided YMLs.
-    """
-    data_folder = Path(
-        os.path.abspath("../data/HCR_785830_2025-03-19_17-00-00/SPIM")
-    )
-    results_folder = Path(os.path.abspath("../results"))
 
-    stitching_xml_path = data_folder.joinpath(
-        "derivatives/stitching_single_channel.xml"
-    )
+    Parameters
+    ----------
+    data_folder: str
+        Folder where the data is stored.
+
+    results_folder: str
+        Results folder
+
+    stitching_xml_path: str
+        Path where the stitching xml path is.
+
+    tilenames: List[str]
+        Tiles to process. E.g.,
+        [Tile_X_000...ome.zarr, ..., ]
+    """
+    data_folder = Path(data_folder)
+    results_folder = Path(results_folder)
 
     zyx_voxel_size = get_voxelsize_from_xml(
         stitching_xml_path=stitching_xml_path
@@ -514,16 +601,12 @@ def main():
     data_processes = []
     zarr_paths = natsorted(list(data_folder.glob("*.zarr")))
 
-    picked = [
-        "Tile_X_0000_Y_0001_Z_0000_ch_488.ome.zarr",
-        "Tile_X_0000_Y_0002_Z_0000_ch_488.ome.zarr",
-    ]
     for zarr_path in zarr_paths:
-        if zarr_path.name in picked:
+        if zarr_path.name in tilenames:
             output_path = results_folder.joinpath(zarr_path.name)
             data_process = correct_and_save_tile(
                 dataset_loc=zarr_path,
-                output_path=output_path,
+                output_path=output_path,  # f"{output_path}_old.zarr",
                 resolution_zyx=zyx_voxel_size,
             )
 
