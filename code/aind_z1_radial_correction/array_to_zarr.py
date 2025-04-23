@@ -4,6 +4,7 @@ Writes a multiscale zarrv3 dataset from an array
 
 import asyncio
 from pathlib import Path
+from typing import Dict, List, Optional
 
 import numpy as np
 import tensorstore as ts
@@ -19,20 +20,60 @@ from aind_hcr_data_transformation.utils.utils import (
     pad_array_n_d,
     write_json,
 )
+from numpy.typing import ArrayLike
 
 
 def convert_array_to_zarr(
-    array,
-    shard_size,
-    chunk_size,
-    output_path,
-    voxel_size,
-    batch_size=3,
-    n_lvls=6,
-    scale_factor=[2, 2, 2],
-    bucket_name=None,
-    compressor_kwargs={"cname": "zstd", "clevel": 3, "shuffle": "shuffle"},
+    array: ArrayLike,
+    shard_size: List[int],
+    chunk_size: List[int],
+    output_path: str,
+    voxel_size: List[float],
+    n_lvls: Optional[int] = 6,
+    scale_factor: Optional[List[int]] = [2, 2, 2],
+    bucket_name: Optional[str] = None,
+    compressor_kwargs: Optional[Dict] = {
+        "cname": "zstd",
+        "clevel": 3,
+        "shuffle": "shuffle",
+    },
 ):
+    """
+    Converts an array to zarr format
+
+    Parameters
+    ----------
+    array: ArrayLike
+        Array to convert to zarr v3
+
+    shard_size: List[int]
+        Shard size
+
+    chunk_size: List[int]
+        Chunksize in each shard
+
+    output_path: str
+        Output path. It must contain the ome.zarr
+        extension attached.
+
+    voxel_size: List[float]
+        Voxel size
+
+    n_lvls: Optional[int]
+        Number of downsampled levels to write.
+        Default: 6
+
+    scale_factor: Optional[List[int]]
+        Scaling factor per axis. Default: [2, 2, 2]
+
+    bucket_name: Optional[str]
+        Bucket name
+        Default: None
+
+    compressor_kwargs: Optional[Dict]
+        Compressor parameters
+        Default: {"cname": "zstd", "clevel": 3, "shuffle": "shuffle"}
+    """
     dataset_shape = tuple(i for i in array.shape if i != 1)
     extra_axes = (1,) * (5 - len(dataset_shape))
     dataset_shape = extra_axes + dataset_shape

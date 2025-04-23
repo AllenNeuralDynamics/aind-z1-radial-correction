@@ -18,6 +18,9 @@ dynamic = ["version"]
 
 dependencies = [
     'git+https://github.com/AllenNeuralDynamics/aind-hcr-data-transformation/tree/dev',
+    'aind-data-schema==1.4.0',
+    'numcodecs==0.15.1',
+    'numba==0.61.2'
 ]
 
 [project.optional-dependencies]

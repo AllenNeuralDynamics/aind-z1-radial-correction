@@ -5,7 +5,6 @@ Computes radial correction in microscopic data
 import asyncio
 import logging
 import multiprocessing as mp
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from math import ceil
