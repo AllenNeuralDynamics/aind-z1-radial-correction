@@ -154,75 +154,6 @@ def _process_plane(args):
     return z, map_coordinates(plane, warp_coords, order=order, mode="constant")
 
 
-def radial_correction_2d(tile_data, corner_shift=5.5, frac_cutoff=0.5):
-    """This code is adapted from Tim Wang
-
-    It is intended to perform radial correction on tiles (to remove lens artifacts) for tiff files.
-    It is being further modified to perform this same function on zarr files.
-
-    Parameters:
-    -------------------
-    tile_data: np.ndarray
-        The tile data to be corrected.
-    corner_shift: float
-        The amount of shift to be applied to the corners of the image.
-    frac_cutoff: float
-        The fraction of the image to be cut off.
-
-    Returns:
-    -------------------
-    img.get(): np.ndarray
-        The corrected image of tile_data
-
-
-    """
-
-    edge = ceil(corner_shift / (2**0.5)) + 1
-
-    # fn = str(np.load(sys.argv[2]))
-    # fn = str(tile_location)
-    shape = tile_data.shape
-    # print(f'tile shape {shape}')
-    pixels = shape[1]  # assume X = Y
-    cutoff = pixels * frac_cutoff
-    img = np.zeros(shape, np.uint16)
-
-    grid = np.array(
-        np.meshgrid(np.arange(pixels), np.arange(pixels), indexing="ij")
-    )
-    coords = (grid - pixels // 2).astype(np.float32)
-
-    r = np.sqrt((coords**2).sum(0))
-
-    angle = np.arctan2(coords[0], coords[1])
-
-    rmax = r.max()
-
-    r_piece = r + (r > cutoff) * (r - cutoff) * corner_shift / (
-        rmax - cutoff
-    )  # piecewise linear
-
-    coords[0], coords[1] = r_piece * np.sin(angle), r_piece * np.cos(angle)
-    coords = np.array(
-        coords[:, edge:-edge, edge:-edge] + pixels // 2, np.float32
-    )
-
-    new_s = np.array(img.shape) - [0, edge * 2, edge * 2]
-
-    arange_list = [np.arange(x).astype(np.int32) for x in new_s]
-    warp_coords = np.array(np.meshgrid(*arange_list[1:], indexing="ij"))
-
-    warp_coords[0] = coords[0][None, ...]
-    warp_coords[1] = coords[1][None, ...]
-
-    img = np.zeros(new_s, np.uint16)
-    for z in range(tile_data.shape[0]):
-        img[z] = map_coordinates(
-            tile_data[z], warp_coords, order=1, mode="constant"
-        )
-    return img
-
-
 def radial_correction(
     tile_data: np.ndarray,
     corner_shift: Optional[float] = 5.5,
@@ -268,8 +199,6 @@ def radial_correction(
 
     # Different processing methods based on mode
     if mode == "2d":
-        # result = radial_correction_2d(tile_data, corner_shift=5.5, frac_cutoff=0.5)
-        # return result
         # Process each z-plane separately in parallel
         result = np.zeros(new_shape, dtype=tile_data.dtype)  # dtype=np.uint16)
 
