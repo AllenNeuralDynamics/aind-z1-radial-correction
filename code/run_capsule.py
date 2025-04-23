@@ -22,7 +22,7 @@ def run():
 
     tilenames = [
         "Tile_X_0000_Y_0001_Z_0000_ch_488.ome.zarr",
-        # "Tile_X_0000_Y_0002_Z_0000_ch_488.ome.zarr",
+        "Tile_X_0000_Y_0002_Z_0000_ch_488.ome.zarr",
     ]
     radial_correction.main(
         data_folder=data_folder,
