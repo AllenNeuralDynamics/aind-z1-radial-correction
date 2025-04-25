@@ -426,10 +426,8 @@ def correct_and_save_tile(
     convert_array_to_zarr(
         array=corrected_tile,
         voxel_size=resolution_zyx,
-        shard_size=[512] * 3,
         chunk_size=[128] * 3,
         output_path=str(output_path),
-        # bucket_name="aind-msma-morphology-data"
     )
 
     data_process = None

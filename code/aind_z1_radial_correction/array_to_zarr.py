@@ -2,41 +2,41 @@
 Writes a multiscale zarrv3 dataset from an array
 """
 
-import asyncio
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import dask.array as da
 import numpy as np
-import tensorstore as ts
+import zarr
 from aind_hcr_data_transformation.compress.czi_to_zarr import (
-    create_downsample_dataset,
-    create_spec,
-)
-from aind_hcr_data_transformation.compress.omezarr_metadata import (
     _get_pyramid_metadata,
+    compute_pyramid,
     write_ome_ngff_metadata,
+)
+from aind_hcr_data_transformation.compress.zarr_writer import (
+    BlockedArrayWriter,
 )
 from aind_hcr_data_transformation.utils.utils import (
     pad_array_n_d,
-    write_json,
 )
+from numcodecs.blosc import Blosc
 from numpy.typing import ArrayLike
+from ome_zarr.io import parse_url
 
 
 def convert_array_to_zarr(
     array: ArrayLike,
-    shard_size: List[int],
     chunk_size: List[int],
     output_path: str,
     voxel_size: List[float],
     n_lvls: Optional[int] = 6,
     scale_factor: Optional[List[int]] = [2, 2, 2],
-    bucket_name: Optional[str] = None,
     compressor_kwargs: Optional[Dict] = {
         "cname": "zstd",
         "clevel": 3,
-        "shuffle": "shuffle",
+        "shuffle": Blosc.SHUFFLE,
     },
+    target_size_mb: Optional[int] = 24000,
 ):
     """
     Converts an array to zarr format
@@ -45,9 +45,6 @@ def convert_array_to_zarr(
     ----------
     array: ArrayLike
         Array to convert to zarr v3
-
-    shard_size: List[int]
-        Shard size
 
     chunk_size: List[int]
         Chunksize in each shard
@@ -66,26 +63,33 @@ def convert_array_to_zarr(
     scale_factor: Optional[List[int]]
         Scaling factor per axis. Default: [2, 2, 2]
 
-    bucket_name: Optional[str]
-        Bucket name
-        Default: None
-
     compressor_kwargs: Optional[Dict]
         Compressor parameters
         Default: {"cname": "zstd", "clevel": 3, "shuffle": "shuffle"}
     """
+    array = pad_array_n_d(array)
     dataset_shape = tuple(i for i in array.shape if i != 1)
     extra_axes = (1,) * (5 - len(dataset_shape))
     dataset_shape = extra_axes + dataset_shape
-
-    shard_size = ([1] * (5 - len(shard_size))) + shard_size
     chunk_size = ([1] * (5 - len(chunk_size))) + chunk_size
+
+    compressor = Blosc(
+        cname=compressor_kwargs["cname"],
+        clevel=compressor_kwargs["clevel"],
+        shuffle=compressor_kwargs["shuffle"],
+        blocksize=0,
+    )
 
     # Getting channel color
     channel_colors = None
     stack_name = Path(output_path).stem
 
-    print(f"Writing from {stack_name} to {output_path} bucket {bucket_name}")
+    # Creating Zarr dataset
+    store = parse_url(path=output_path, mode="w").store
+    root_group = zarr.group(store=store)
+
+    # Using 1 thread since is in single machine.
+    # Avoiding the use of multithreaded due to GIL
 
     if np.issubdtype(array.dtype, np.integer):
         np_info_func = np.iinfo
@@ -103,17 +107,23 @@ def convert_array_to_zarr(
         for _ in range(dataset_shape[1])
     ]
 
-    # Setting values for array
+    # Setting values for CZI
     # Ideally we would use da.percentile(image_data, (0.1, 95))
     # However, it would take so much time and resources and it is
     # not used that much on neuroglancer
     channel_startend = [(0.0, 550.0) for _ in range(dataset_shape[1])]
 
     # Writing OME-NGFF metadata
-    scale_factor = [float(s) for s in scale_factor]
+    scale_factor = [int(s) for s in scale_factor]
     voxel_size = [float(v) for v in voxel_size]
 
-    multiscale_zarr_json = write_ome_ngff_metadata(
+    new_channel_group = root_group.create_group(
+        name=stack_name, overwrite=True
+    )
+
+    # Writing OME-NGFF metadata
+    write_ome_ngff_metadata(
+        group=new_channel_group,
         arr_shape=dataset_shape,
         image_name=stack_name,
         n_lvls=n_lvls,
@@ -124,42 +134,63 @@ def convert_array_to_zarr(
         channel_minmax=channel_minmax,
         channel_startend=channel_startend,
         metadata=_get_pyramid_metadata(),
-        chunk_size=chunk_size,
+        final_chunksize=chunk_size,
     )
 
-    # Full resolution spec
-    spec = create_spec(
-        output_path=output_path,
-        bucket_name=bucket_name,
-        data_shape=dataset_shape,
-        data_dtype=array.dtype.name,
-        shard_shape=shard_size,
-        chunk_shape=chunk_size,
-        zyx_resolution=voxel_size,
-        compressor_kwargs=compressor_kwargs,
+    # Writing first multiscale by default
+    pyramid_group = new_channel_group.create_dataset(
+        name="0",
+        shape=dataset_shape,
+        chunks=chunk_size,
+        dtype=array.dtype,
+        compressor=compressor,
+        dimension_separator="/",
+        overwrite=True,
     )
 
-    dataset = ts.open(spec).result()
+    # Writing multiscales
+    previous_scale = da.from_array(array, pyramid_group.chunks)
 
-    dataset.write(pad_array_n_d(array)).result()
-
-    for level in range(n_lvls):
-        asyncio.run(
-            create_downsample_dataset(
-                dataset_path=output_path,
-                start_scale=level,
-                downsample_factor=scale_factor,
-                compressor_kwargs=compressor_kwargs,
-                bucket_name=bucket_name,
-            )
+    block_shape = list(
+        BlockedArrayWriter.get_block_shape(
+            arr=previous_scale,
+            target_size_mb=target_size_mb,
+            chunks=chunk_size,
         )
-
-    # Writes top level json
-    write_json(
-        bucket_name=bucket_name,
-        output_path=output_path,
-        json_data=multiscale_zarr_json,
     )
+    block_shape = extra_axes + tuple(block_shape)
+
+    for level in range(0, n_lvls):
+        if not level:
+            array_to_write = previous_scale
+
+        else:
+            previous_scale = da.from_zarr(pyramid_group, pyramid_group.chunks)
+            new_scale_factor = (
+                [1] * (len(previous_scale.shape) - len(scale_factor))
+            ) + scale_factor
+
+            previous_scale_pyramid, _ = compute_pyramid(
+                data=previous_scale,
+                scale_axis=new_scale_factor,
+                chunks=chunk_size,
+                n_lvls=2,
+            )
+            array_to_write = previous_scale_pyramid[-1]
+
+            print(f"[level {level}]: pyramid level: {array_to_write.shape}")
+
+            pyramid_group = new_channel_group.create_dataset(
+                name=str(level),
+                shape=array_to_write.shape,
+                chunks=chunk_size,
+                dtype=array_to_write.dtype,
+                compressor=compressor,
+                dimension_separator="/",
+                overwrite=True,
+            )
+
+        BlockedArrayWriter.store(array_to_write, pyramid_group, block_shape)
 
 
 if __name__ == "__main__":

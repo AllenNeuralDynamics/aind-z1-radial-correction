@@ -1,6 +1,6 @@
-# hash:sha256:50f80eb345256aeff785c23e9229271578e805c60efff3b041aa803e1d452dcd
+# hash:sha256:cedf516b759d94cec8be45c22dcfd5529a30cbf13621132b133667019f53473a
 ARG REGISTRY_HOST
-FROM $REGISTRY_HOST/codeocean/mambaforge3:24.5.0-0-python3.12.4-ubuntu22.04
+FROM $REGISTRY_HOST/codeocean/mambaforge3:23.1.0-4-python3.10.12-ubuntu22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG AWS_ACCESS_KEY_ID
@@ -12,8 +12,8 @@ ARG GIT_ACCESS_TOKEN
 COPY git-askpass /
 
 RUN pip install -U --no-cache-dir \
-    git+https://github.com/AllenNeuralDynamics/aind-hcr-data-transformation.git@dev \
+    git+https://github.com/AllenNeuralDynamics/aind-hcr-data-transformation.git \
     aind-data-schema==1.4.0 \
-    numcodecs==0.15.1 \
+    numcodecs==0.13.1 \
     numba==0.61.2 \
     jupyterlab
