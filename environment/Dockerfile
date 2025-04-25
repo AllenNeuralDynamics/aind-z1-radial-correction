@@ -16,4 +16,5 @@ RUN pip install -U --no-cache-dir \
     aind-data-schema==1.4.0 \
     numcodecs==0.13.1 \
     numba==0.61.2 \
+    tensorstore==0.1.72 \
     jupyterlab
