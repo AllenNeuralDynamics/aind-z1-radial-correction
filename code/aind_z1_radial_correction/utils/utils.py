@@ -105,7 +105,7 @@ def get_voxel_resolution(acquisition_path: Path) -> List[float]:
         Voxel resolution in the format [z, y, x].
     """
 
-    if not acquisition_path.is_file():
+    if not Path(acquisition_path).is_file():
         raise FileNotFoundError(
             f"acquisition.json file not found at: {acquisition_path}"
         )

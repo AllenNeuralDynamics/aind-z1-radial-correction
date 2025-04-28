@@ -492,6 +492,7 @@ def main(
     zyx_voxel_size = utils.get_voxel_resolution(
         acquisition_path=acquisition_path
     )
+    LOGGER.info(f"Voxel ZYX resolution: {zyx_voxel_size}")
 
     data_processes = []
     zarr_paths = natsorted(list(data_folder.glob("*.zarr")))
