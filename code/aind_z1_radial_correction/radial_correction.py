@@ -396,15 +396,26 @@ def apply_corr_to_zarr_tile(
     return output_radial
 
 
-# TODO: Improve performance and zarr writing
 def correct_and_save_tile(
-    dataset_loc,
-    output_path,
-    resolution_zyx,
-    scale="0",
+    dataset_loc: str,
+    output_path: str,
+    resolution_zyx: List[float],
+    scale: str = "0",
 ):
     """
-    correct and save a single tile
+    Corrects and saves a single tile.
+
+    Parameters
+    ----------
+    dataset_loc: str
+        Path to the dataset to be corrected.
+    output_path: str
+        Path to save the corrected dataset.
+    resolution_zyx: List[float]
+        Voxel size in the format [z, y, x].
+    scale: str
+        Multiscale to load the data.
+        Default: 0
     """
 
     corner_shift = calculate_corner_shift_from_pixel_size(resolution_zyx[1])
@@ -450,52 +461,10 @@ def correct_and_save_tile(
     return data_process
 
 
-def get_voxelsize_from_xml(stitching_xml_path: str) -> List[str]:
-    """
-    Extract zarr path and voxel size information from a stitching XML file.
-
-    Parameters
-    ----------
-    stitching_xml_path: str
-        Path to the stitching XML file
-
-    Returns
-    -------
-    List
-        list of voxel sizes in ZYX order
-
-    Raises
-    ------
-    FileNotFoundError: If the XML file doesn't exist
-    ValueError: If required elements are not found in the XML
-    """
-    if not Path(stitching_xml_path).exists():
-        raise FileNotFoundError(f"{stitching_xml_path} path does not exist.")
-
-    tree = ET.parse(stitching_xml_path)
-    root = tree.getroot()
-
-    # Find voxel size
-    xyz_voxelsize = None
-    for elem in root.iter("voxelSize"):
-        xyz_voxelsize = elem.findtext("size")
-        if xyz_voxelsize is not None:
-            break
-
-    if xyz_voxelsize is None:
-        raise ValueError("No 'voxelSize/size' element found in the XML file.")
-
-    # Convert from XYZ to ZYX order
-    zyx_voxelsize_list = xyz_voxelsize.split(" ")
-    zyx_voxelsize_list.reverse()
-
-    return zyx_voxelsize_list
-
-
 def main(
     data_folder: str,
     results_folder: str,
-    stitching_xml_path: str,
+    acquisition_path: str,
     tilenames: List[str],
 ):
     """
@@ -510,8 +479,8 @@ def main(
     results_folder: str
         Results folder
 
-    stitching_xml_path: str
-        Path where the stitching xml path is.
+    acquisition_path: str
+        Path where the acquisition.json is.
 
     tilenames: List[str]
         Tiles to process. E.g.,
@@ -520,8 +489,8 @@ def main(
     data_folder = Path(data_folder)
     results_folder = Path(results_folder)
 
-    zyx_voxel_size = get_voxelsize_from_xml(
-        stitching_xml_path=stitching_xml_path
+    zyx_voxel_size = utils.get_voxel_resolution(
+        acquisition_path=acquisition_path
     )
 
     data_processes = []
@@ -532,7 +501,7 @@ def main(
             output_path = results_folder.joinpath(zarr_path.name)
             data_process = correct_and_save_tile(
                 dataset_loc=zarr_path,
-                output_path=output_path,  # f"{output_path}_old.zarr",
+                output_path=output_path,
                 resolution_zyx=zyx_voxel_size,
             )
 

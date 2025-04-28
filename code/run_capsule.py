@@ -5,31 +5,51 @@ to the data directory
 
 import os
 
-from aind_z1_radial_correction import radial_correction
+from aind_z1_radial_correction import radial_correction, utils
 
 
 def run():
     """
     Main run file in Code Ocean
     """
-    data_folder = os.path.abspath(
-        "../data/HCR_785830_2025-03-19_17-00-00/SPIM"
-    )
+    data_folder = os.path.abspath("../data")
     results_folder = os.path.abspath("../results")
-    stitching_xml_path = (
-        f"{data_folder}/derivatives/stitching_single_channel.xml"
+    acquisition_path = f"{data_folder}/acquisition.json"
+    radial_correction_parameters_path = (
+        f"{data_folder}/radial_correction_parameters.json"
     )
 
-    tilenames = [
-        "Tile_X_0000_Y_0001_Z_0000_ch_488.ome.zarr",
-        "Tile_X_0000_Y_0002_Z_0000_ch_488.ome.zarr",
+    required_input_elements = [
+        acquisition_path,
+        radial_correction_parameters_path,
     ]
-    radial_correction.main(
-        data_folder=data_folder,
-        results_folder=results_folder,
-        stitching_xml_path=stitching_xml_path,
-        tilenames=tilenames,
+
+    missing_files = utils.validate_capsule_inputs(required_input_elements)
+
+    if len(missing_files):
+        raise ValueError(
+            f"We miss the following files in the capsule input: {missing_files}"
+        )
+
+    radial_correction_parameters = utils.read_json_as_dict(
+        radial_correction_parameters_path
     )
+
+    tilenames = radial_correction_parameters.get("tilenames", [])
+    worker_id = radial_correction_parameters.get("worker_id", None)
+
+    print(f"Worker ID: {worker_id} processing {len(tilenames)} tiles!")
+
+    if len(tilenames):
+        radial_correction.main(
+            data_folder=data_folder,
+            results_folder=results_folder,
+            acquisition_path=acquisition_path,
+            tilenames=tilenames,
+        )
+
+    else:
+        print(f"Nothing to do! Tilenames: {tilenames}")
 
 
 if __name__ == "__main__":
