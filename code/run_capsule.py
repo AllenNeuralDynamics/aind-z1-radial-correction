@@ -5,7 +5,8 @@ to the data directory
 
 import os
 
-from aind_z1_radial_correction import radial_correction, utils
+from aind_z1_radial_correction import radial_correction
+from aind_z1_radial_correction.utils import utils
 
 
 def run():
