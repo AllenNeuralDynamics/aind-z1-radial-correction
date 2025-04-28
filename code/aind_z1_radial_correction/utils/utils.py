@@ -9,12 +9,8 @@ from typing import List
 from xml.etree import ElementTree as ET
 
 import yaml
-from aind_data_schema.core.processing import (
-    DataProcess,
-    PipelineProcess,
-    Processing,
-    ProcessName,
-)
+from aind_data_schema.core.processing import (DataProcess, PipelineProcess,
+                                              Processing, ProcessName)
 
 
 def generate_processing(
@@ -59,9 +55,7 @@ def generate_processing(
             and needs to be compiled with other steps at the end",
     )
 
-    processing.write_standard_file(
-        output_directory=dest_processing, prefix=prefix
-    )
+    processing.write_standard_file(output_directory=dest_processing, prefix=prefix)
 
 
 def read_json_as_dict(filepath: str) -> dict:
@@ -119,9 +113,7 @@ def get_voxel_resolution(acquisition_path: Path) -> List[float]:
 
     # Grabbing a tile with metadata from acquisition - we assume all
     # dataset was acquired with the same resolution
-    tile_coord_transforms = acquisition_config["tiles"][0][
-        "coordinate_transformations"
-    ]
+    tile_coord_transforms = acquisition_config["tiles"][0]["coordinate_transformations"]
 
     scale_transform = [
         x["scale"] for x in tile_coord_transforms if x["type"] == "scale"

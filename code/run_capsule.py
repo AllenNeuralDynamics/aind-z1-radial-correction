@@ -4,10 +4,10 @@ to the data directory
 """
 
 import os
+from pathlib import Path
 
 from aind_z1_radial_correction import radial_correction
 from aind_z1_radial_correction.utils import utils
-from pathlib import Path
 
 
 def run():
@@ -24,8 +24,6 @@ def run():
     radial_correction_parameters_path = (
         f"{worker_scheduler_path}/radial_correction_parameters.json"
     )
-
-    print(f"Contents data folder: {list(Path(data_folder).glob('*'))}")
 
     required_input_elements = [
         acquisition_path,

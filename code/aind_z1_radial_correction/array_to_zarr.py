@@ -9,16 +9,10 @@ import dask.array as da
 import numpy as np
 import zarr
 from aind_hcr_data_transformation.compress.czi_to_zarr import (
-    _get_pyramid_metadata,
-    compute_pyramid,
-    write_ome_ngff_metadata,
-)
-from aind_hcr_data_transformation.compress.zarr_writer import (
-    BlockedArrayWriter,
-)
-from aind_hcr_data_transformation.utils.utils import (
-    pad_array_n_d,
-)
+    _get_pyramid_metadata, compute_pyramid, write_ome_ngff_metadata)
+from aind_hcr_data_transformation.compress.zarr_writer import \
+    BlockedArrayWriter
+from aind_hcr_data_transformation.utils.utils import pad_array_n_d
 from numcodecs.blosc import Blosc
 from numpy.typing import ArrayLike
 from ome_zarr.io import parse_url
@@ -82,10 +76,10 @@ def convert_array_to_zarr(
 
     # Getting channel color
     channel_colors = None
-    stack_name = Path(output_path).stem
-
+    stack_name = Path(output_path).name
+    print("Stack name", stack_name)
     # Creating Zarr dataset
-    store = parse_url(path=output_path, mode="w").store
+    store = parse_url(path=str(Path(output_path).parent), mode="w").store
     root_group = zarr.group(store=store)
 
     # Using 1 thread since is in single machine.
@@ -117,9 +111,7 @@ def convert_array_to_zarr(
     scale_factor = [int(s) for s in scale_factor]
     voxel_size = [float(v) for v in voxel_size]
 
-    new_channel_group = root_group.create_group(
-        name=stack_name, overwrite=True
-    )
+    new_channel_group = root_group.create_group(name=stack_name, overwrite=True)
 
     # Writing OME-NGFF metadata
     write_ome_ngff_metadata(

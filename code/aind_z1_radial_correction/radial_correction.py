@@ -16,10 +16,7 @@ import dask.array as da
 import numba as nb
 import numpy as np
 import tensorstore as ts
-from aind_data_schema.core.processing import (
-    DataProcess,
-    ProcessName,
-)
+from aind_data_schema.core.processing import DataProcess, ProcessName
 from dask.diagnostics import ProgressBar
 from dask.distributed import Client, LocalCluster
 from natsort import natsorted
@@ -222,17 +219,11 @@ def radial_correction(
             warp_coords[0, z] = z
 
         # Apply pre-computed X-Y coordinate transformations to each z-plane
-        warp_coords[1] = np.repeat(
-            coords[0][np.newaxis, :, :], new_shape[0], axis=0
-        )
-        warp_coords[2] = np.repeat(
-            coords[1][np.newaxis, :, :], new_shape[0], axis=0
-        )
+        warp_coords[1] = np.repeat(coords[0][np.newaxis, :, :], new_shape[0], axis=0)
+        warp_coords[2] = np.repeat(coords[1][np.newaxis, :, :], new_shape[0], axis=0)
 
         # Process the entire volume at once
-        return map_coordinates(
-            tile_data, warp_coords, order=order, mode="constant"
-        )
+        return map_coordinates(tile_data, warp_coords, order=order, mode="constant")
 
 
 def read_zarr(
@@ -360,9 +351,7 @@ def apply_corr_to_zarr_tile(
         The corrected tile.
     """
     if z_size_threshold < 0:
-        raise ValueError(
-            f"Please, provide a correct threshold: {z_size_threshold}"
-        )
+        raise ValueError(f"Please, provide a correct threshold: {z_size_threshold}")
 
     # Reading zarr dataset
     data_in_memory, lazy_array = asyncio.run(
@@ -439,6 +428,7 @@ def correct_and_save_tile(
         voxel_size=resolution_zyx,
         chunk_size=[128] * 3,
         output_path=str(output_path),
+        n_lvls=4,
     )
 
     data_process = None
@@ -489,9 +479,7 @@ def main(
     data_folder = Path(data_folder)
     results_folder = Path(results_folder)
 
-    zyx_voxel_size = utils.get_voxel_resolution(
-        acquisition_path=acquisition_path
-    )
+    zyx_voxel_size = utils.get_voxel_resolution(acquisition_path=acquisition_path)
     LOGGER.info(f"Voxel ZYX resolution: {zyx_voxel_size}")
 
     data_processes = []
