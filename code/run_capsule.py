@@ -16,9 +16,13 @@ def run():
     """
     data_folder = os.path.abspath("../data")
     results_folder = os.path.abspath("../results")
-    acquisition_path = f"{data_folder}/acquisition.json"
+
+    # Worker scheduler path has radial parameters and acquisition
+    worker_scheduler_path = list(Path(data_folder).glob("worker*"))[0]
+
+    acquisition_path = f"{worker_scheduler_path}/acquisition.json"
     radial_correction_parameters_path = (
-        f"{data_folder}/radial_correction_parameters.json"
+        f"{worker_scheduler_path}/radial_correction_parameters.json"
     )
 
     print(f"Contents data folder: {list(Path(data_folder).glob('*'))}")
