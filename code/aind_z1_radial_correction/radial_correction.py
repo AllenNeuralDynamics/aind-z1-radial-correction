@@ -487,7 +487,9 @@ def main(
 
     for zarr_path in zarr_paths:
         if zarr_path.name in tilenames:
-            output_path = results_folder.joinpath(zarr_path.name)
+            # Removing the .ome.zarr to be only .zarr
+            curr_tilename = zarr_path.name.replace(".ome.zarr", ".zarr")
+            output_path = results_folder.joinpath(curr_tilename)
             data_process = correct_and_save_tile(
                 dataset_loc=zarr_path,
                 output_path=output_path,
