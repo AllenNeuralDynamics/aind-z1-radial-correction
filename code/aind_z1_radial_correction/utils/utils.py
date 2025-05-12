@@ -6,14 +6,11 @@ import json
 import os
 from pathlib import Path
 from typing import List
-from xml.etree import ElementTree as ET
 
-import yaml
 from aind_data_schema.core.processing import (
     DataProcess,
     PipelineProcess,
     Processing,
-    ProcessName,
 )
 
 

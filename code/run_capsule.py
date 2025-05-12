@@ -71,6 +71,10 @@ def run():
             tilenames=tilenames,
         )
 
+        # Write the output path to a file
+        with open(f"{results_folder}/output_path.txt", "w") as f:
+            f.write(results_folder)
+
     else:
         print(f"Nothing to do! Tilenames: {tilenames}")
 
