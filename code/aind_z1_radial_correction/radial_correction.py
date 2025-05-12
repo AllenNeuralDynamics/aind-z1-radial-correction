@@ -218,11 +218,17 @@ def radial_correction(
             warp_coords[0, z] = z
 
         # Apply pre-computed X-Y coordinate transformations to each z-plane
-        warp_coords[1] = np.repeat(coords[0][np.newaxis, :, :], new_shape[0], axis=0)
-        warp_coords[2] = np.repeat(coords[1][np.newaxis, :, :], new_shape[0], axis=0)
+        warp_coords[1] = np.repeat(
+            coords[0][np.newaxis, :, :], new_shape[0], axis=0
+        )
+        warp_coords[2] = np.repeat(
+            coords[1][np.newaxis, :, :], new_shape[0], axis=0
+        )
 
         # Process the entire volume at once
-        return map_coordinates(tile_data, warp_coords, order=order, mode="constant")
+        return map_coordinates(
+            tile_data, warp_coords, order=order, mode="constant"
+        )
 
 
 def read_zarr(
@@ -350,7 +356,9 @@ def apply_corr_to_zarr_tile(
         The corrected tile.
     """
     if z_size_threshold < 0:
-        raise ValueError(f"Please, provide a correct threshold: {z_size_threshold}")
+        raise ValueError(
+            f"Please, provide a correct threshold: {z_size_threshold}"
+        )
 
     # Reading zarr dataset
     data_in_memory, lazy_array = asyncio.run(
@@ -389,6 +397,7 @@ def correct_and_save_tile(
     output_path: str,
     resolution_zyx: List[float],
     scale: str = "0",
+    n_lvls: Optional[int] = 4,
 ):
     """
     Corrects and saves a single tile.
@@ -404,6 +413,15 @@ def correct_and_save_tile(
     scale: str
         Multiscale to load the data.
         Default: 0
+    n_lvls: Optional[int]
+        Number of downsampled levels to write.
+        Default: 4
+    s3_output_path: str
+        Dataset name in S3.
+        Default: None
+    cloud_write: bool
+        If True, write to S3.
+        Default: True
     """
 
     corner_shift = calculate_corner_shift_from_pixel_size(resolution_zyx[1])
@@ -427,7 +445,7 @@ def correct_and_save_tile(
         voxel_size=resolution_zyx,
         chunk_size=[128] * 3,
         output_path=str(output_path),
-        n_lvls=4,
+        n_lvls=n_lvls,
     )
 
     data_process = None
@@ -466,7 +484,8 @@ def main(
         Folder where the data is stored.
 
     results_folder: str
-        Results folder
+        Results folder. It could be a local path or
+        a S3 bucket.
 
     acquisition_path: str
         Path where the acquisition.json is.
@@ -474,11 +493,13 @@ def main(
     tilenames: List[str]
         Tiles to process. E.g.,
         [Tile_X_000...ome.zarr, ..., ]
+
     """
     data_folder = Path(data_folder)
-    results_folder = Path(results_folder)
 
-    zyx_voxel_size = utils.get_voxel_resolution(acquisition_path=acquisition_path)
+    zyx_voxel_size = utils.get_voxel_resolution(
+        acquisition_path=acquisition_path
+    )
     LOGGER.info(f"Voxel ZYX resolution: {zyx_voxel_size}")
 
     data_processes = []
@@ -488,7 +509,7 @@ def main(
         if zarr_path.name in tilenames:
             # Removing the .ome.zarr to be only .zarr
             curr_tilename = zarr_path.name.replace(".ome.zarr", ".zarr")
-            output_path = results_folder.joinpath(curr_tilename)
+            output_path = f"{results_folder}/{curr_tilename}"
             data_process = correct_and_save_tile(
                 dataset_loc=zarr_path,
                 output_path=output_path,

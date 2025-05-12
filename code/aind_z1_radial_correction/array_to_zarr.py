@@ -9,9 +9,13 @@ import dask.array as da
 import numpy as np
 import zarr
 from aind_hcr_data_transformation.compress.czi_to_zarr import (
-    _get_pyramid_metadata, compute_pyramid, write_ome_ngff_metadata)
-from aind_hcr_data_transformation.compress.zarr_writer import \
-    BlockedArrayWriter
+    _get_pyramid_metadata,
+    compute_pyramid,
+    write_ome_ngff_metadata,
+)
+from aind_hcr_data_transformation.compress.zarr_writer import (
+    BlockedArrayWriter,
+)
 from aind_hcr_data_transformation.utils.utils import pad_array_n_d
 from numcodecs.blosc import Blosc
 from numpy.typing import ArrayLike
@@ -111,7 +115,9 @@ def convert_array_to_zarr(
     scale_factor = [int(s) for s in scale_factor]
     voxel_size = [float(v) for v in voxel_size]
 
-    new_channel_group = root_group.create_group(name=stack_name, overwrite=True)
+    new_channel_group = root_group.create_group(
+        name=stack_name, overwrite=True
+    )
 
     # Writing OME-NGFF metadata
     write_ome_ngff_metadata(
