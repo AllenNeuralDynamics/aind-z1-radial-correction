@@ -10,7 +10,6 @@ from concurrent.futures import ThreadPoolExecutor
 from math import ceil
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple, Union
-from xml.etree import ElementTree as ET
 
 import dask.array as da
 import numba as nb

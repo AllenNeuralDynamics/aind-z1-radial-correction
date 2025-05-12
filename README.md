@@ -2,10 +2,15 @@
 
 Computes radial correction in OMEZarr data coming from the Z1 microscope.
 
+The capsule requires the following inputs:
+
+- data/worker_{ID}/acquisition.json: Json with the acquisition metadata.
+- data/worker_{ID}/radial_correction_parameters.json: Json with the parameters to run radial correction on N tiles previously splitted. This is necessary since we are using this code as part of a nextflow pipeline where we split the tiles into multiple nodes to process. Therefore, the nextflow script will divide the worker_{ID} folders generated in the previous step.
+
 [![License](https://img.shields.io/badge/license-MIT-brightgreen)](LICENSE)
 ![Code Style](https://img.shields.io/badge/code%20style-black-black)
 [![semantic-release: angular](https://img.shields.io/badge/semantic--release-angular-e10079?logo=semantic-release)](https://github.com/semantic-release/semantic-release)
-![Interrogate](https://img.shields.io/badge/interrogate-64.0%25-red)
+![Interrogate](https://img.shields.io/badge/interrogate-59.3%25-red)
 ![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen?logo=codecov)
 ![Python](https://img.shields.io/badge/python->=3.7-blue?logo=python)
 
