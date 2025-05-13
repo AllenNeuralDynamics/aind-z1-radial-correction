@@ -65,7 +65,7 @@ def run():
 
     if len(tilenames):
         radial_correction.main(
-            data_folder=f"{data_folder}/HCR_785830_2025-03-19_17-00-00/SPIM",
+            data_folder=data_folder,
             results_folder=results_folder,
             acquisition_path=acquisition_path,
             tilenames=tilenames,
