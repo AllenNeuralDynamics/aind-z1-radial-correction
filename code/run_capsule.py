@@ -58,23 +58,23 @@ def run():
 
     print(f"Worker ID: {worker_id} processing {len(tilenames)} tiles!")
 
+    write_folder = results_folder
     if bucket_name is not None:
-        results_folder = (
+        write_folder = (
             f"s3://{bucket_name}/{dataset_name}/image_radial_correction"
         )
 
     if len(tilenames):
         radial_correction.main(
             data_folder=data_folder,
-            results_folder=results_folder,
+            results_folder=write_folder,
             acquisition_path=acquisition_path,
             tilenames=tilenames,
         )
 
-        results_folder = os.path.abspath("../results")
         # Write the output path to a file
         with open(f"{results_folder}/output_path.txt", "w") as f:
-            f.write(results_folder)
+            f.write(write_folder)
 
     else:
         print(f"Nothing to do! Tilenames: {tilenames}")
