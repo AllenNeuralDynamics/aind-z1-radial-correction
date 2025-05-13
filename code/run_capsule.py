@@ -73,7 +73,7 @@ def run():
         )
 
         # Write the output path to a file
-        with open(f"{results_folder}/output_path.txt", "w") as f:
+        with open(f"{results_folder}/output_path_worker_{worker_id}.txt", "w") as f:
             f.write(write_folder)
 
     else:
