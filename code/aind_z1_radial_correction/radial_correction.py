@@ -505,6 +505,9 @@ def main(
     data_processes = []
     zarr_paths = natsorted(list(data_folder.glob("*.zarr")))
 
+    if not len(zarr_paths):
+        raise ValueError(f"No tiles in: {data_folder}")
+
     for zarr_path in zarr_paths:
         if zarr_path.name in tilenames:
             # Removing the .ome.zarr to be only .zarr

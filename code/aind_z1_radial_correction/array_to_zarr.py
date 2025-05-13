@@ -4,6 +4,7 @@ Writes a multiscale zarrv3 dataset from an array
 
 from pathlib import Path
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 import dask.array as da
 import numpy as np
@@ -20,6 +21,51 @@ from aind_hcr_data_transformation.utils.utils import pad_array_n_d
 from numcodecs.blosc import Blosc
 from numpy.typing import ArrayLike
 from ome_zarr.io import parse_url
+from zarr.storage import FSStore
+
+
+def is_s3_path(path: str) -> bool:
+    """
+    Checks if a path is an s3 path
+
+    Parameters
+    ----------
+    path: str
+        Provided path
+
+    Returns
+    -------
+    bool
+        True if it is a S3 path,
+        False if not.
+    """
+    parsed = urlparse(str(path))
+    return parsed.scheme == "s3"
+
+
+def get_parent_path(path: str) -> str:
+    """
+    Gets parent path
+
+    Parameters
+    ----------
+    path: str
+        Provided path
+
+    Returns
+    -------
+    str
+        Parent path
+    """
+    parsed = urlparse(path)
+    if parsed.scheme == "s3":
+        # Remove the last part of the S3 key
+        parts = parsed.path.strip("/").split("/")
+        parent_key = "/".join(parts[:-1])
+        return f"s3://{parsed.netloc}/{parent_key}"
+    else:
+        # Local path fallback
+        return str(Path(path).parent)
 
 
 def convert_array_to_zarr(
@@ -81,14 +127,17 @@ def convert_array_to_zarr(
     # Getting channel color
     channel_colors = None
     stack_name = Path(output_path).name
-    print("Stack name", stack_name)
-    # Creating Zarr dataset
-    store = parse_url(path=str(Path(output_path).parent), mode="w").store
+    parent_path = get_parent_path(output_path)
+    # Creating Zarr dataset in s3 or local
+    if is_s3_path(output_path):
+        store = FSStore(parent_path, mode="w", dimension_separator="/")
+    else:
+        store = parse_url(path=parent_path, mode="w").store
+
     root_group = zarr.group(store=store)
 
     # Using 1 thread since is in single machine.
     # Avoiding the use of multithreaded due to GIL
-
     if np.issubdtype(array.dtype, np.integer):
         np_info_func = np.iinfo
 

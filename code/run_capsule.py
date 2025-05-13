@@ -65,12 +65,13 @@ def run():
 
     if len(tilenames):
         radial_correction.main(
-            data_folder=data_folder,
+            data_folder=f"{data_folder}/HCR_785830_2025-03-19_17-00-00/SPIM",
             results_folder=results_folder,
             acquisition_path=acquisition_path,
             tilenames=tilenames,
         )
 
+        results_folder = os.path.abspath("../results")
         # Write the output path to a file
         with open(f"{results_folder}/output_path.txt", "w") as f:
             f.write(results_folder)

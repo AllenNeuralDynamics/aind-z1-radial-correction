@@ -17,4 +17,5 @@ RUN pip install -U --no-cache-dir \
     numcodecs==0.13.1 \
     numba==0.61.2 \
     tensorstore==0.1.72 \
+    s3fs==2025.3.2 \
     jupyterlab
