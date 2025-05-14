@@ -519,7 +519,6 @@ def main(
 
     data_processes = []
     for tilename in tilenames:
-        # Removing the .ome.zarr to be only .zarr
         curr_tilename = tilename
         zarr_path = f"{data_folder}/{tilename}"
         output_path = f"{results_folder}/{curr_tilename}"
