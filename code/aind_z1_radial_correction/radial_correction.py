@@ -388,7 +388,7 @@ def apply_corr_to_zarr_tile(
     output_radial = None
 
     LOGGER.info(f"Dataset shape {data_in_memory.shape}")
-    exit()
+
     mode = "2d"
 
     if z_size < z_size_threshold:
