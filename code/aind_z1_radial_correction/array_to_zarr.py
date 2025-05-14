@@ -21,9 +21,33 @@ from numcodecs.blosc import Blosc
 from numpy.typing import ArrayLike
 from ome_zarr.io import parse_url
 from zarr.storage import FSStore
+from zarr.errors import ContainsGroupError
 
 from .utils.utils import get_parent_path, is_s3_path
 
+
+def safe_create_zarr_group(store, path: str = '', **kwargs):
+    """
+    Safe creation of the zarr group.
+
+    Parameters
+    ----------
+    store
+        Zarr store
+    path: str
+        Path to the creation of the zarr group
+        Default: ''
+
+    Returns
+    -------
+    Zarr.group
+        Zarr group pointing to where the data is written
+    """
+    try:
+        return zarr.group(store=store, path=path, overwrite=False, **kwargs)
+    except ContainsGroupError:
+        # Group already exists, which is expected with multiple workers
+        return zarr.open_group(store=store, path=path, mode='r+')
 
 def convert_array_to_zarr(
     array: ArrayLike,
@@ -91,7 +115,7 @@ def convert_array_to_zarr(
     else:
         store = parse_url(path=parent_path, mode="w").store
 
-    root_group = zarr.group(store=store)
+    root_group = safe_create_zarr_group(store=store)
 
     # Using 1 thread since is in single machine.
     # Avoiding the use of multithreaded due to GIL
