@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 from typing import List
+from urllib.parse import urlparse
 
 from aind_data_schema.core.processing import (
     DataProcess,
@@ -156,3 +157,47 @@ def validate_capsule_inputs(input_elements: List[str]) -> List[str]:
             missing_inputs.append(str(required_input_element))
 
     return missing_inputs
+
+
+def is_s3_path(path: str) -> bool:
+    """
+    Checks if a path is an s3 path
+
+    Parameters
+    ----------
+    path: str
+        Provided path
+
+    Returns
+    -------
+    bool
+        True if it is a S3 path,
+        False if not.
+    """
+    parsed = urlparse(str(path))
+    return parsed.scheme == "s3"
+
+
+def get_parent_path(path: str) -> str:
+    """
+    Gets parent path
+
+    Parameters
+    ----------
+    path: str
+        Provided path
+
+    Returns
+    -------
+    str
+        Parent path
+    """
+    parsed = urlparse(path)
+    if parsed.scheme == "s3":
+        # Remove the last part of the S3 key
+        parts = parsed.path.strip("/").split("/")
+        parent_key = "/".join(parts[:-1])
+        return f"s3://{parsed.netloc}/{parent_key}"
+    else:
+        # Local path fallback
+        return str(Path(path).parent)

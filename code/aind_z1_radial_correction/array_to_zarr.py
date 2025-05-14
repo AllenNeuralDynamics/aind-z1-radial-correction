@@ -4,7 +4,6 @@ Writes a multiscale zarrv3 dataset from an array
 
 from pathlib import Path
 from typing import Dict, List, Optional
-from urllib.parse import urlparse
 
 import dask.array as da
 import numpy as np
@@ -23,49 +22,7 @@ from numpy.typing import ArrayLike
 from ome_zarr.io import parse_url
 from zarr.storage import FSStore
 
-
-def is_s3_path(path: str) -> bool:
-    """
-    Checks if a path is an s3 path
-
-    Parameters
-    ----------
-    path: str
-        Provided path
-
-    Returns
-    -------
-    bool
-        True if it is a S3 path,
-        False if not.
-    """
-    parsed = urlparse(str(path))
-    return parsed.scheme == "s3"
-
-
-def get_parent_path(path: str) -> str:
-    """
-    Gets parent path
-
-    Parameters
-    ----------
-    path: str
-        Provided path
-
-    Returns
-    -------
-    str
-        Parent path
-    """
-    parsed = urlparse(path)
-    if parsed.scheme == "s3":
-        # Remove the last part of the S3 key
-        parts = parsed.path.strip("/").split("/")
-        parent_key = "/".join(parts[:-1])
-        return f"s3://{parsed.netloc}/{parent_key}"
-    else:
-        # Local path fallback
-        return str(Path(path).parent)
+from .utils.utils import get_parent_path, is_s3_path
 
 
 def convert_array_to_zarr(

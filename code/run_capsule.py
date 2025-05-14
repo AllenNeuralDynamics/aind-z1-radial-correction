@@ -55,6 +55,9 @@ def run():
     tilenames = radial_correction_parameters.get("tilenames", [])
     worker_id = radial_correction_parameters.get("worker_id", None)
     bucket_name = radial_correction_parameters.get("bucket_name", None)
+    input_s3_dataset_path = radial_correction_parameters.get(
+        "input_s3_dataset_path", None
+    )
 
     print(f"Worker ID: {worker_id} processing {len(tilenames)} tiles!")
 
@@ -63,6 +66,9 @@ def run():
         write_folder = (
             f"s3://{bucket_name}/{dataset_name}/image_radial_correction"
         )
+
+    if input_s3_dataset_path is not None:
+        data_folder = f"s3://{bucket_name}/{input_s3_dataset_path}"
 
     if len(tilenames):
         radial_correction.main(
@@ -73,7 +79,9 @@ def run():
         )
 
         # Write the output path to a file
-        with open(f"{results_folder}/output_path_worker_{worker_id}.txt", "w") as f:
+        with open(
+            f"{results_folder}/output_path_worker_{worker_id}.txt", "w"
+        ) as f:
             f.write(write_folder)
 
     else:

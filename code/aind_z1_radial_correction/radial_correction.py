@@ -6,6 +6,7 @@ import asyncio
 import logging
 import multiprocessing as mp
 import time
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from math import ceil
 from pathlib import Path
@@ -278,38 +279,54 @@ async def read_zarr_tensorstore(
     dataset_path: str, scale: str, driver: Optional[str] = "zarr"
 ) -> Tuple:
     """
-    Reads a zarr dataset
-
+    Reads a zarr dataset from local filesystem or S3 bucket
     Parameters
     ----------
     dataset_path: str
-        Path where the dataset is stored.
-
+        Path where the dataset is stored. Can be a local path or an S3 path (s3://...)
     scale: str
         Multiscale to load
-
     driver: Optional[str]
         Tensorstore driver
         Default: zarr
-
     Returns
     -------
     Tuple[ArrayLike, da.Array]
         ArrayLike or None if compute is false
         Lazy dask array
     """
-    ts_spec = {
-        "driver": str(driver),
-        "kvstore": {
-            "driver": "file",
-            "path": str(dataset_path),
-        },
-        "path": str(scale),
-    }
+    # Parse the URL properly using urllib
+    parsed_url = urllib.parse.urlparse(dataset_path)
+
+    if parsed_url.scheme == "s3":
+        # Handle S3 path
+        bucket = parsed_url.netloc
+        # Remove leading slash if present
+        key = parsed_url.path.lstrip("/")
+        print(parsed_url, bucket, key)
+
+        ts_spec = {
+            "driver": str(driver),
+            "kvstore": {
+                "driver": "s3",
+                "bucket": bucket,
+                "path": key,
+            },
+            "path": str(scale),
+        }
+    else:
+        # Original local file handling
+        ts_spec = {
+            "driver": str(driver),
+            "kvstore": {
+                "driver": "file",
+                "path": str(dataset_path),
+            },
+            "path": str(scale),
+        }
 
     tile_lazy = await ts.open(ts_spec)
     tile = await tile_lazy.read()
-
     return tile, tile_lazy
 
 
@@ -371,7 +388,7 @@ def apply_corr_to_zarr_tile(
     output_radial = None
 
     LOGGER.info(f"Dataset shape {data_in_memory.shape}")
-
+    exit()
     mode = "2d"
 
     if z_size < z_size_threshold:
@@ -495,29 +512,22 @@ def main(
         [Tile_X_000...ome.zarr, ..., ]
 
     """
-    data_folder = Path(data_folder)
-
     zyx_voxel_size = utils.get_voxel_resolution(
         acquisition_path=acquisition_path
     )
     LOGGER.info(f"Voxel ZYX resolution: {zyx_voxel_size}")
 
     data_processes = []
-    zarr_paths = natsorted(list(data_folder.glob("*.zarr")))
-
-    if not len(zarr_paths):
-        raise ValueError(f"No tiles in: {data_folder}")
-
-    for zarr_path in zarr_paths:
-        if zarr_path.name in tilenames:
-            # Removing the .ome.zarr to be only .zarr
-            curr_tilename = zarr_path.name.replace(".ome.zarr", ".zarr")
-            output_path = f"{results_folder}/{curr_tilename}"
-            data_process = correct_and_save_tile(
-                dataset_loc=zarr_path,
-                output_path=output_path,
-                resolution_zyx=zyx_voxel_size,
-            )
+    for tilename in tilenames:
+        # Removing the .ome.zarr to be only .zarr
+        curr_tilename = tilename
+        zarr_path = f"{data_folder}/{tilename}"
+        output_path = f"{results_folder}/{curr_tilename}"
+        data_process = correct_and_save_tile(
+            dataset_loc=zarr_path,
+            output_path=output_path,
+            resolution_zyx=zyx_voxel_size,
+        )
 
     # utils.generate_processing(
     #     data_processes=data_processes,
