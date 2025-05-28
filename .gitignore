@@ -137,3 +137,5 @@ dmypy.json
 
 # MacOs
 **/.DS_Store
+data/
+.codeocean/

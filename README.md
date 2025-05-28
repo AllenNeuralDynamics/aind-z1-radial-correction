@@ -1,4 +1,11 @@
-# aind-radial-correction
+# aind-z1-radial-correction
+
+Computes radial correction in OMEZarr data coming from the Z1 microscope.
+
+The capsule requires the following inputs:
+
+- data/worker_{ID}/acquisition.json: Json with the acquisition metadata.
+- data/worker_{ID}/radial_correction_parameters.json: Json with the parameters to run radial correction on N tiles previously splitted. This is necessary since we are using this code as part of a nextflow pipeline where we split the tiles into multiple nodes to process. Therefore, the nextflow script will divide the worker_{ID} folders generated in the previous step.
 
 [![License](https://img.shields.io/badge/license-MIT-brightgreen)](LICENSE)
 ![Code Style](https://img.shields.io/badge/code%20style-black-black)

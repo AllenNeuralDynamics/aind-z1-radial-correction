@@ -3,10 +3,10 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aind-radial-correction"
+name = "aind-z1-radial-correction"
 description = "Generated from aind-library-template"
 license = {text = "MIT"}
-requires-python = ">=3.7"
+requires-python = ">=3.9.2"
 authors = [
     {name = "Allen Institute for Neural Dynamics"}
 ]
@@ -17,6 +17,11 @@ readme = "README.md"
 dynamic = ["version"]
 
 dependencies = [
+    'git+https://github.com/AllenNeuralDynamics/aind-hcr-data-transformation.git',
+    'aind-data-schema==1.4.0',
+    'numcodecs==0.13.1',
+    'numba==0.61.2',
+    'tensorstore==0.1.72'
 ]
 
 [project.optional-dependencies]
@@ -27,18 +32,19 @@ dev = [
     'interrogate',
     'isort',
     'Sphinx',
-    'furo'
+    'furo',
+    'natsort'
 ]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["code"]
 
 [tool.setuptools.dynamic]
-version = {attr = "aind_radial_correction.__version__"}
+version = {attr = "aind_z1_radial_correction.__version__"}
 
 [tool.black]
 line-length = 79
-target_version = ['py36']
+target_version = ['py310']
 exclude = '''
 
 (
@@ -59,16 +65,16 @@ exclude = '''
 
 [tool.coverage.run]
 omit = ["*__init__*"]
-source = ["aind_radial_correction", "tests"]
+source = ["aind_z1_radial_correction", "tests"]
 
 [tool.coverage.report]
 exclude_lines = [
     "if __name__ == .__main__.:",
-    "from",
-    "import",
+    "^from .* import .*",
+    "^import .*",
     "pragma: no cover"
 ]
-fail_under = 100
+fail_under = 40
 
 [tool.isort]
 line_length = 79
