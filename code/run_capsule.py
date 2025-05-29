@@ -15,13 +15,6 @@ def run():
     """
     Main run file in Code Ocean
     """
-    if len(sys.argv) < 3:
-        print("Usage: run_capsule.py <int_write_to_s3>")
-        sys.exit(1)
-
-    TENSORSTORE_DRIVER = "zarr3"
-    write_to_s3 = bool(int(sys.argv[1]))
-    sys.argv = [sys.argv[0]]
 
     data_folder = os.path.abspath("../data")
     results_folder = os.path.abspath("../results")
@@ -39,7 +32,7 @@ def run():
     required_input_elements = [
         acquisition_path,
         radial_correction_parameters_path,
-        data_description_path,
+        # data_description_path,
     ]
 
     missing_files = utils.validate_capsule_inputs(required_input_elements)
@@ -59,6 +52,10 @@ def run():
     input_s3_dataset_path = radial_correction_parameters.get(
         "input_s3_dataset_path", None
     )
+    tensorstore_driver = radial_correction_parameters.get(
+        "tensorstore_driver", "zarr3"
+    )
+    write_to_s3 = radial_correction_parameters.get("write_to_s3", True)
 
     print(f"Worker ID: {worker_id} processing {len(tilenames)} tiles!")
 
@@ -84,7 +81,7 @@ def run():
             results_folder=write_folder,
             acquisition_path=acquisition_path,
             tilenames=tilenames,
-            driver=TENSORSTORE_DRIVER,
+            driver=tensorstore_driver,
         )
 
         # Write the output path to a file
