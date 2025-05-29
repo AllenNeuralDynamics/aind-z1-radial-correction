@@ -20,13 +20,13 @@ from aind_hcr_data_transformation.utils.utils import pad_array_n_d
 from numcodecs.blosc import Blosc
 from numpy.typing import ArrayLike
 from ome_zarr.io import parse_url
-from zarr.storage import FSStore
 from zarr.errors import ContainsGroupError
+from zarr.storage import FSStore
 
 from .utils.utils import get_parent_path, is_s3_path
 
 
-def safe_create_zarr_group(store, path: str = '', **kwargs):
+def safe_create_zarr_group(store, path: str = "", **kwargs):
     """
     Safe creation of the zarr group.
 
@@ -47,7 +47,8 @@ def safe_create_zarr_group(store, path: str = '', **kwargs):
         return zarr.group(store=store, path=path, overwrite=False, **kwargs)
     except ContainsGroupError:
         # Group already exists, which is expected with multiple workers
-        return zarr.open_group(store=store, path=path, mode='r+')
+        return zarr.open_group(store=store, path=path, mode="r+")
+
 
 def convert_array_to_zarr(
     array: ArrayLike,
@@ -139,7 +140,7 @@ def convert_array_to_zarr(
     # Ideally we would use da.percentile(image_data, (0.1, 95))
     # However, it would take so much time and resources and it is
     # not used that much on neuroglancer
-    channel_startend = [(0.0, 550.0) for _ in range(dataset_shape[1])]
+    channel_startend = [(90.0, 1200.0) for _ in range(dataset_shape[1])]
 
     # Writing OME-NGFF metadata
     scale_factor = [int(s) for s in scale_factor]
