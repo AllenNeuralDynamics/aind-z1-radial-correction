@@ -32,7 +32,7 @@ def run():
     required_input_elements = [
         acquisition_path,
         radial_correction_parameters_path,
-        # data_description_path,
+        data_description_path,
     ]
 
     missing_files = utils.validate_capsule_inputs(required_input_elements)
