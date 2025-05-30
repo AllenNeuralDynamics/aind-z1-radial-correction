@@ -338,6 +338,7 @@ def apply_corr_to_zarr_tile(
     z_size_threshold: Optional[int] = 400,
     order: Optional[int] = 1,
     max_workers: Optional[int] = None,
+    driver: Optional[str] = "zarr",
 ) -> np.ndarray:
     """
     Load a Zarr tile, apply radial correction, and return corrected tile.
@@ -367,6 +368,10 @@ def apply_corr_to_zarr_tile(
         Max number of workers.
         Default: None
 
+    driver: Optional[str]
+        Zarr driver to read the data.
+        Default: zarr
+
     Returns
     -------
     np.ndarray
@@ -379,7 +384,7 @@ def apply_corr_to_zarr_tile(
 
     # Reading zarr dataset
     data_in_memory, lazy_array = asyncio.run(
-        read_zarr_tensorstore(dataset_path, scale=scale, driver="zarr")
+        read_zarr_tensorstore(dataset_path, scale=scale, driver=driver)
     )
     # data_in_memory, lazy_array = read_zarr(f"{dataset_path}/{scale}", compute=True)
     data_in_memory = data_in_memory.squeeze()
@@ -415,6 +420,7 @@ def correct_and_save_tile(
     resolution_zyx: List[float],
     scale: str = "0",
     n_lvls: Optional[int] = 4,
+    driver: Optional[str] = "zarr",
 ):
     """
     Corrects and saves a single tile.
@@ -439,6 +445,9 @@ def correct_and_save_tile(
     cloud_write: bool
         If True, write to S3.
         Default: True
+    driver: Optional[str]
+        Driver to read the data with tensorstore.
+        Default: "zarr"
     """
 
     corner_shift = calculate_corner_shift_from_pixel_size(resolution_zyx[1])
@@ -450,7 +459,7 @@ def correct_and_save_tile(
 
     start_time = time.time()
     corrected_tile = apply_corr_to_zarr_tile(
-        dataset_loc, scale, corner_shift, frac_cutoff
+        dataset_loc, scale, corner_shift, frac_cutoff, driver=driver
     )
     end_time = time.time()
     LOGGER.info(
@@ -490,6 +499,7 @@ def main(
     results_folder: str,
     acquisition_path: str,
     tilenames: List[str],
+    driver: Optional[str] = "zarr",
 ):
     """
     Radial correction to multiple tiles
@@ -511,6 +521,10 @@ def main(
         Tiles to process. E.g.,
         [Tile_X_000...ome.zarr, ..., ]
 
+    driver: Optional[str]
+        Driver to read the data with tensorstore
+        Default: "zarr"
+
     """
     zyx_voxel_size = utils.get_voxel_resolution(
         acquisition_path=acquisition_path
@@ -526,6 +540,7 @@ def main(
             dataset_loc=zarr_path,
             output_path=output_path,
             resolution_zyx=zyx_voxel_size,
+            driver=driver,
         )
 
     # utils.generate_processing(
