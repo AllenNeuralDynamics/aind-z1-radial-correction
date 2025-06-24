@@ -13,6 +13,7 @@ from aind_data_schema.core.processing import (
     PipelineProcess,
     Processing,
 )
+from packaging import version
 
 
 def generate_processing(
@@ -102,18 +103,38 @@ def get_voxel_resolution(acquisition_path: Path) -> List[float]:
     List[float]
         Voxel resolution in the format [z, y, x].
     """
-
     if not Path(acquisition_path).is_file():
         raise FileNotFoundError(
             f"acquisition.json file not found at: {acquisition_path}"
         )
 
-    acquisition_config = read_json_as_dict(acquisition_path)
+    acquisition_config = read_json_as_dict(str(acquisition_path))
+
+    schema_version = acquisition_config.get("schema_version")
+    print(f"Schema version: {schema_version}")
+
+    if version.parse(schema_version) >= version.parse("2.0.0"):
+        return _get_voxel_resolution_v2(acquisition_config)
+    else:
+        return _get_voxel_resolution_v1(acquisition_config)
+
+
+def _get_voxel_resolution_v1(acquisition_config: dict) -> List[float]:
+    """
+    Get the voxel resolution from an acquisition.json file.
+
+    Parameters
+    ----------
+    acquisition_config: Dict
+        Dictionary with the acquisition.json data.
+    Returns
+    -------
+    List[float]
+        Voxel resolution in the format [z, y, x].
+    """
 
     if not acquisition_config:
-        raise ValueError(
-            f"acquisition.json file is empty or invalid: {acquisition_path}"
-        )
+        raise ValueError("acquisition.json file is empty or invalid.")
 
     # Grabbing a tile with metadata from acquisition - we assume all
     # dataset was acquired with the same resolution
@@ -123,6 +144,47 @@ def get_voxel_resolution(acquisition_path: Path) -> List[float]:
 
     scale_transform = [
         x["scale"] for x in tile_coord_transforms if x["type"] == "scale"
+    ][0]
+
+    x = float(scale_transform[0])
+    y = float(scale_transform[1])
+    z = float(scale_transform[2])
+
+    return [z, y, x]
+
+
+def _get_voxel_resolution_v2(acquisition_config: dict) -> List[float]:
+    """
+    Get the voxel resolution from an acquisition.json in
+    aind-data-schema v2 format.
+
+    Parameters
+    ----------
+    acquisition_config: Dict
+        Dictionary with the acquisition.json data.
+
+    Returns
+    -------
+    List[float]
+        Voxel resolution in the format [z, y, x].
+    """
+    try:
+        data_stream = acquisition_config.get("data_streams", [])[0]
+        configuration = data_stream.get("configurations", [])[0]
+        image = configuration.get("images", [])[0]
+        image_to_acquisition_transform = image[
+            "image_to_acquisition_transform"
+        ]
+    except (IndexError, AttributeError, KeyError) as e:
+        raise ValueError(
+            "acquisition_config structure is invalid or missing "
+            "required fields"
+        ) from e
+
+    scale_transform = [
+        x["scale"]
+        for x in image_to_acquisition_transform
+        if x["object_type"] == "Scale"
     ][0]
 
     x = float(scale_transform[0])
