@@ -103,12 +103,12 @@ def get_voxel_resolution(acquisition_path: Path) -> List[float]:
     List[float]
         Voxel resolution in the format [z, y, x].
     """
-    if not acquisition_path.is_file():
+    if not Path(acquisition_path).is_file():
         raise FileNotFoundError(
             f"acquisition.json file not found at: {acquisition_path}"
         )
 
-    acquisition_config = read_json_as_dict(acquisition_path)
+    acquisition_config = read_json_as_dict(str(acquisition_path))
 
     schema_version = acquisition_config.get("schema_version")
     print(f"Schema version: {schema_version}")
