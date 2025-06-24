@@ -172,12 +172,12 @@ def _get_voxel_resolution_v2(acquisition_config: dict) -> List[float]:
         Voxel resolution in the format [z, y, x].
     """
     try:
-            data_stream = acquisition_config.get("data_streams", [])[0]
-            configuration = data_stream.get("configurations", [])[0]
-            image = configuration.get("images", [])[0]
-            image_to_acquisition_transform = image[
-                "image_to_acquisition_transform"
-            ]
+        data_stream = acquisition_config.get("data_streams", [])[0]
+        configuration = data_stream.get("configurations", [])[0]
+        image = configuration.get("images", [])[0]
+        image_to_acquisition_transform = image[
+            "image_to_acquisition_transform"
+        ]
     except (IndexError, AttributeError, KeyError) as e:
         raise ValueError(
             "acquisition_config structure is invalid or missing "
