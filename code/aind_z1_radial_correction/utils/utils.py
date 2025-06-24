@@ -7,14 +7,13 @@ import os
 from pathlib import Path
 from typing import List
 from urllib.parse import urlparse
-from packaging import version
-
 
 from aind_data_schema.core.processing import (
     DataProcess,
     PipelineProcess,
     Processing,
 )
+from packaging import version
 
 
 def generate_processing(
@@ -90,6 +89,7 @@ def read_json_as_dict(filepath: str) -> dict:
 
     return dictionary
 
+
 def get_voxel_resolution(acquisition_path: Path) -> List[float]:
     """
     Get the voxel resolution from an acquisition.json file.
@@ -104,9 +104,9 @@ def get_voxel_resolution(acquisition_path: Path) -> List[float]:
         Voxel resolution in the format [z, y, x].
     """
     if not acquisition_path.is_file():
-            raise FileNotFoundError(
-                f"acquisition.json file not found at: {acquisition_path}"
-            )
+        raise FileNotFoundError(
+            f"acquisition.json file not found at: {acquisition_path}"
+        )
 
     acquisition_config = read_json_as_dict(acquisition_path)
 
@@ -114,12 +114,10 @@ def get_voxel_resolution(acquisition_path: Path) -> List[float]:
     print(f"Schema version: {schema_version}")
 
     if version.parse(schema_version) >= version.parse("2.0.0"):
-        return _get_voxel_resolution_v2(
-            acquisition_config
-        )
+        return _get_voxel_resolution_v2(acquisition_config)
     else:
         return _get_voxel_resolution_v1(acquisition_config)
-    
+
 
 def _get_voxel_resolution_v1(acquisition_config: dict) -> List[float]:
     """
@@ -136,9 +134,7 @@ def _get_voxel_resolution_v1(acquisition_config: dict) -> List[float]:
     """
 
     if not acquisition_config:
-        raise ValueError(
-            "acquisition.json file is empty or invalid."
-        )
+        raise ValueError("acquisition.json file is empty or invalid.")
 
     # Grabbing a tile with metadata from acquisition - we assume all
     # dataset was acquired with the same resolution
@@ -156,17 +152,18 @@ def _get_voxel_resolution_v1(acquisition_config: dict) -> List[float]:
 
     return [z, y, x]
 
+
 def _get_voxel_resolution_v2(acquisition_config: dict) -> List[float]:
     """
-    Get the voxel resolution from an acquisition.json in 
-    aind-data-schema v2 format. 
+    Get the voxel resolution from an acquisition.json in
+    aind-data-schema v2 format.
 
     Parameters
     ----------
     acquisition_config: Dict
         Dictionary with the acquisition.json data.
-            
-    Returns 
+
+    Returns
     -------
     List[float]
         Voxel resolution in the format [z, y, x].
