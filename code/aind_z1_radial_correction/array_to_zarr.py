@@ -99,6 +99,11 @@ def convert_array_to_zarr(
     dataset_shape = extra_axes + dataset_shape
     chunk_size = ([1] * (5 - len(chunk_size))) + chunk_size
 
+    #verify that the chunksize is not larger than the dataset shape
+    for i, val in enumerate(dataset_shape):
+        if chunk_size[i] > val:
+            chunk_size[i] = val
+
     compressor = Blosc(
         cname=compressor_kwargs["cname"],
         clevel=compressor_kwargs["clevel"],
