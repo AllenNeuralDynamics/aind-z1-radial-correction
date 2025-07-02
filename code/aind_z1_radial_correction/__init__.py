@@ -1,6 +1,6 @@
 """Z1 radial correction."""
 
-__version__ = "0.0.4"
+__version__ = "0.0.5"
 __authors__ = ["Camilo Laiton", "Carson Berry", "Tim Wang"]
 __author_emails__ = [
     "camilo.laiton@alleninstitute.org",
@@ -18,4 +18,4 @@ __maintainer_emails__ = [
 ]
 __title__ = "aind-z1-radial-correction"
 __status__ = "Development"  # 'Development' 'Production', 'Beta'
-__pipeline_version__ = "0.0.1"
+__pipeline_version__ = "0.0.2"
