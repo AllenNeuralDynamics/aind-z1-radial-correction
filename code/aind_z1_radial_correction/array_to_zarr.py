@@ -135,8 +135,10 @@ def convert_array_to_zarr(
     # Getting min max metadata for the dtype
     channel_minmax = [
         (
-            int(np_info_func(array.dtype).min),
-            int(np_info_func(array.dtype).max),
+            # int(np_info_func(array.dtype).min),
+            int(0.0),
+            # int(np_info_func(array.dtype).max),
+            int(1.0),
         )
         for _ in range(dataset_shape[1])
     ]
@@ -145,7 +147,7 @@ def convert_array_to_zarr(
     # Ideally we would use da.percentile(image_data, (0.1, 95))
     # However, it would take so much time and resources and it is
     # not used that much on neuroglancer
-    channel_startend = [(int(90.0), int(1200.0)) for _ in range(dataset_shape[1])]
+    channel_startend = [(int(0), int(1.0)) for _ in range(dataset_shape[1])]
 
     # Writing OME-NGFF metadata
     scale_factor = [int(s) for s in scale_factor]
