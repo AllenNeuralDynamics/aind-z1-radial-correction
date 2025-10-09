@@ -17,6 +17,7 @@ from aind_hcr_data_transformation.compress.zarr_writer import (
     BlockedArrayWriter,
 )
 from aind_hcr_data_transformation.utils.utils import pad_array_n_d
+# from aind_hcr_data_transformation.compress.omezarr_metadata import _downscale_origin
 from numcodecs.blosc import Blosc
 from numpy.typing import ArrayLike
 from ome_zarr.io import parse_url
@@ -171,6 +172,7 @@ def convert_array_to_zarr(
         channel_startend=channel_startend,
         metadata=_get_pyramid_metadata(),
         final_chunksize=chunk_size,
+        origin = [0,0,0]
     )
 
     # Writing first multiscale by default
