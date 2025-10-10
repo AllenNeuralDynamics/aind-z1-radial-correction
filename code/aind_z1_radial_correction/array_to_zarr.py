@@ -172,7 +172,7 @@ def convert_array_to_zarr(
         channel_startend=channel_startend,
         metadata=_get_pyramid_metadata(),
         final_chunksize=chunk_size,
-        # origin = [0,0,0]
+        origin = [0,0,0]
     )
 
     # Writing first multiscale by default
