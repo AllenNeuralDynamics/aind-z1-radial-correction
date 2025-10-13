@@ -12,7 +12,7 @@ ARG GIT_ACCESS_TOKEN
 COPY git-askpass /
 
 RUN pip install -U --no-cache-dir \
-    git+https://github.com/AllenNeuralDynamics/aind-hcr-data-transformation.git \
+    git+https://github.com/AllenNeuralDynamics/aind-hcr-data-transformation.git@0.0.7 \
     aind-data-schema==1.4.0 \
     numcodecs==0.13.1 \
     numba==0.61.2 \
