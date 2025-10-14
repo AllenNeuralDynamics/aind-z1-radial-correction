@@ -540,6 +540,7 @@ def main(
             dataset_loc=zarr_path,
             output_path=output_path,
             resolution_zyx=zyx_voxel_size,
+            n_lvls = 6,
             driver=driver,
         )
 
