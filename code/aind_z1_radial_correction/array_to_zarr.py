@@ -9,12 +9,15 @@ import dask.array as da
 import numpy as np
 import zarr
 from aind_hcr_data_transformation.compress.czi_to_zarr import (
-    _get_pyramid_metadata,
-    compute_pyramid,
-    write_ome_ngff_metadata,
+    # compute_pyramid,
+    create_downsample_dataset
 )
 from aind_hcr_data_transformation.compress.zarr_writer import (
     BlockedArrayWriter,
+)
+from aind_hcr_data_transformation.compress.omezarr_metadata import (
+    write_ome_ngff_metadata,
+    _get_pyramid_metadata
 )
 from aind_hcr_data_transformation.utils.utils import pad_array_n_d
 # from aind_hcr_data_transformation.compress.omezarr_metadata import _downscale_origin
@@ -203,33 +206,42 @@ def convert_array_to_zarr(
             array_to_write = previous_scale
 
         else:
-            previous_scale = da.from_zarr(pyramid_group, pyramid_group.chunks)
-            new_scale_factor = (
-                [1] * (len(previous_scale.shape) - len(scale_factor))
-            ) + scale_factor
+            # previous_scale = da.from_zarr(pyramid_group, pyramid_group.chunks)
+            # new_scale_factor = (
+                # [1] * (len(previous_scale.shape) - len(scale_factor))
+            # ) + scale_factor
 
-            previous_scale_pyramid, _ = compute_pyramid(
-                data=previous_scale,
-                scale_axis=new_scale_factor,
-                chunks=chunk_size,
-                n_lvls=2,
+            # previous_scale_pyramid, _ = compute_pyramid(
+        #         data=previous_scale,
+        #         scale_axis=new_scale_factor,
+        #         chunks=chunk_size,
+        #         n_lvls=2,
+        #     )
+        #     array_to_write = previous_scale_pyramid[-1]
+
+        #     print(f"[level {level}]: pyramid level: {array_to_write.shape}")
+
+        #     pyramid_group = new_channel_group.create_dataset(
+        #         name=str(level),
+        #         shape=array_to_write.shape,
+        #         chunks=chunk_size,
+        #         dtype=array_to_write.dtype,
+        #         compressor=compressor,
+        #         dimension_separator="/",
+        #         overwrite=True,
+        #     )
+
+        # BlockedArrayWriter.store(array_to_write, pyramid_group, block_shape)
+            asyncio.run(
+                create_downsample_dataset(
+                    dataset_path=output_path,
+                    start_scale=level,
+                    downsample_factor=scale_factor,
+                    downsample_mode=downsample_mode,
+                    compressor_kwargs=compressor_kwargs,
+                    bucket_name=bucket_name,
+                )
             )
-            array_to_write = previous_scale_pyramid[-1]
-
-            print(f"[level {level}]: pyramid level: {array_to_write.shape}")
-
-            pyramid_group = new_channel_group.create_dataset(
-                name=str(level),
-                shape=array_to_write.shape,
-                chunks=chunk_size,
-                dtype=array_to_write.dtype,
-                compressor=compressor,
-                dimension_separator="/",
-                overwrite=True,
-            )
-
-        BlockedArrayWriter.store(array_to_write, pyramid_group, block_shape)
-
 
 if __name__ == "__main__":
     BASE_PATH = "/data"

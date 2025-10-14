@@ -12,7 +12,7 @@ ARG GIT_ACCESS_TOKEN
 COPY git-askpass /
 
 RUN pip install -U --no-cache-dir \
-    git+https://github.com/AllenNeuralDynamics/aind-hcr-data-transformation.git@v0.0.7 \
+    git+https://github.com/AllenNeuralDynamics/aind-hcr-data-transformation.git@v0.0.5 \
     aind-data-schema==1.4.0 \
     botocore==1.37.35 \
     awscli==1.38.35 \
