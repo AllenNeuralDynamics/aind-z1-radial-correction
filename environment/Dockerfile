@@ -18,6 +18,6 @@ RUN pip install -U --no-cache-dir \
     awscli==1.38.35 \
     numcodecs==0.13.1 \
     numba==0.61.2 \
-    # tensorstore==0.1.72 \
+     tensorstore==0.1.72 \
     s3fs==0.4.2 \
     jupyterlab
