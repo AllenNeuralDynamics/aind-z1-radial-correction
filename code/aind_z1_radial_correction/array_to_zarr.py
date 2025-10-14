@@ -4,27 +4,23 @@ Writes a multiscale zarrv3 dataset from an array
 
 from pathlib import Path
 from typing import Dict, List, Optional
-
 import dask.array as da
 import numpy as np
 import zarr
 from aind_hcr_data_transformation.compress.czi_to_zarr import (
     _get_pyramid_metadata,
     compute_pyramid,
-    # create_downsample_dataset
     write_ome_ngff_metadata,
 )
 from aind_hcr_data_transformation.compress.zarr_writer import (
     BlockedArrayWriter,
 )
 from aind_hcr_data_transformation.utils.utils import pad_array_n_d
-# from aind_hcr_data_transformation.compress.omezarr_metadata import _downscale_origin
 from numcodecs.blosc import Blosc
 from numpy.typing import ArrayLike
 from ome_zarr.io import parse_url
 from zarr.errors import ContainsGroupError
 from zarr.storage import FSStore
-
 from .utils.utils import get_parent_path, is_s3_path
 
 
@@ -230,16 +226,6 @@ def convert_array_to_zarr(
             )
 
         BlockedArrayWriter.store(array_to_write, pyramid_group, block_shape)
-            # asyncio.run(
-            #     create_downsample_dataset(
-            #         dataset_path=output_path,
-            #         start_scale=level,
-            #         downsample_factor=scale_factor,
-            #         downsample_mode=downsample_mode,
-            #         compressor_kwargs=compressor_kwargs,
-            #         bucket_name=bucket_name,
-            #     )
-            # )
 
 if __name__ == "__main__":
     BASE_PATH = "/data"
