@@ -6,10 +6,37 @@ to the data directory
 import os
 import sys
 from pathlib import Path
+import subprocess
+from datetime import datetime, timezone
+
+from aind_z1_radial_correction import __version__, __maintainers__
+from aind_data_schema.base import _GenericModel
+from aind_data_schema.components.identifiers import Code
+from aind_data_schema.core.processing import DataProcess, ProcessStage
+from aind_data_schema_models.process_names import ProcessName
 
 from aind_z1_radial_correction import radial_correction
 from aind_z1_radial_correction.utils import utils
 
+REPO_URL = "https://github.com/AllenNeuralDynamics/aind-z1-radial-correction"
+GIT_URL = f"{REPO_URL}.git"
+
+def fetch_main_commit_sha():
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", GIT_URL, "refs/heads/main"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.split()[0]
+
+        print(f"[processing-metadata] Git SHA unavailable: {result.stderr.strip()}")
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"[processing-metadata] Git SHA unavailable: {exc}")
+
+    return None
 
 def run():
     """
@@ -76,6 +103,8 @@ def run():
         data_folder = f"s3://{bucket_name}/{input_s3_dataset_path}"
 
     if len(tilenames):
+        start_time = datetime.now(timezone.utc)
+
         radial_correction.main(
             data_folder=data_folder,
             results_folder=write_folder,
@@ -84,14 +113,75 @@ def run():
             driver=tensorstore_driver,
         )
 
-        # Write the output path to a file
+        end_time = datetime.now(timezone.utc)
+
+        # Write the output path for the dispatcher.
         with open(
             f"{results_folder}/output_path_worker_{worker_id}.txt", "w"
         ) as f:
             f.write(write_folder)
 
+        # Only worker 0 writes the shared processing.json.
+        if int(worker_id) == 0:
+            data_processes = [
+                DataProcess(
+                    process_type=ProcessName.IMAGE_RADIAL_CORRECTION,
+                    stage=ProcessStage.PROCESSING,
+                    code=Code(
+                        url=REPO_URL,
+                        name="aind-z1-radial-correction",
+                        version=__version__,
+                        commit_hash=fetch_main_commit_sha(),
+                        run_script="/code/run",
+                        language="Python",
+                        parameters=_GenericModel(
+                            input_location=str(data_folder),
+                            output_location=str(write_folder),
+                            tensorstore_driver=tensorstore_driver,
+                            corner_shift=4.3,
+                            frac_cutoff=0.5,
+                            n_lvls=6,
+                        ),
+                    ),
+                    experimenters=__maintainers__,
+                    start_date_time=start_time,
+                    end_date_time=end_time,
+                )
+            ]
+
+            processing_json_s3 = None
+
+            if write_to_s3:
+                processing_json_s3 = (
+                    f"s3://{bucket_name}/{dataset_name}/processing.json"
+                )
+
+            utils.generate_processing(
+                data_processes=data_processes,
+                dest_processing=results_folder,
+                processing_json_s3=processing_json_s3,
+            )
+
     else:
         print(f"Nothing to do! Tilenames: {tilenames}")
+
+    # if len(tilenames):
+    #     radial_correction.main(
+    #         data_folder=data_folder,
+    #         results_folder=write_folder,
+    #         acquisition_path=acquisition_path,
+    #         tilenames=tilenames,
+    #         driver=tensorstore_driver,
+    #     )
+
+    #     # Write the output path to a file
+    #     with open(
+    #         f"{results_folder}/output_path_worker_{worker_id}.txt", "w"
+    #     ) as f:
+    #         f.write(write_folder)
+
+    # else:
+    #     print(f"Nothing to do! Tilenames: {tilenames}")
 
 
 if __name__ == "__main__":
