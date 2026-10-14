@@ -118,21 +118,28 @@ def generate_processing(
         print("[processing-metadata] Appended radial correction.")
 
     # Write locally.
-    output_path = Path(dest_processing) / "processing.json"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # output_path = Path(dest_processing) / "processing.json"
+    # output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    output_path.write_text(
-        json.dumps(processing, indent=3) + "\n",
-        encoding="utf-8",
-    )
+    # output_path.write_text(
+    #     json.dumps(processing, indent=3) + "\n",
+    #     encoding="utf-8",
+    # )
 
-    print(f"[processing-metadata] Wrote {output_path}")
+    # print(f"[processing-metadata] Wrote {output_path}")
 
     # Upload consolidated processing.json to S3.
-    s3.upload_file(
-        str(output_path),
-        parsed.netloc,
-        parsed.path.lstrip("/"),
+    # s3.upload_file(
+    #     str(output_path),
+    #     parsed.netloc,
+    #     parsed.path.lstrip("/"),
+    # )
+
+    s3.put_object(
+        Bucket=parsed.netloc,
+        Key=parsed.path.lstrip("/"),
+        Body=(json.dumps(processing, indent=3) + "\n").encode("utf-8"),
+        ContentType="application/json",
     )
 
     print(f"[processing-metadata] Uploaded -> {processing_json_s3}")
