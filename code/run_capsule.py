@@ -165,24 +165,5 @@ def run():
     else:
         print(f"Nothing to do! Tilenames: {tilenames}")
 
-    # if len(tilenames):
-    #     radial_correction.main(
-    #         data_folder=data_folder,
-    #         results_folder=write_folder,
-    #         acquisition_path=acquisition_path,
-    #         tilenames=tilenames,
-    #         driver=tensorstore_driver,
-    #     )
-
-    #     # Write the output path to a file
-    #     with open(
-    #         f"{results_folder}/output_path_worker_{worker_id}.txt", "w"
-    #     ) as f:
-    #         f.write(write_folder)
-
-    # else:
-    #     print(f"Nothing to do! Tilenames: {tilenames}")
-
-
 if __name__ == "__main__":
     run()
