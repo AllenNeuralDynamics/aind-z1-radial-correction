@@ -7,11 +7,10 @@ import os
 from pathlib import Path
 from typing import List
 from urllib.parse import urlparse
+
 import boto3
-from botocore.exceptions import ClientError
-
 from aind_data_schema.core.processing import DataProcess, Processing
-
+from botocore.exceptions import ClientError
 from packaging import version
 
 
@@ -57,9 +56,7 @@ def generate_processing(
             raise ValueError("Invalid existing processing.json")
 
         # Preserve existing processing history and append radial correction.
-        existing["data_processes"].extend(
-            processing["data_processes"]
-        )
+        existing["data_processes"].extend(processing["data_processes"])
 
         processing = existing
 
@@ -73,6 +70,7 @@ def generate_processing(
     )
 
     print(f"[processing-metadata] Uploaded -> {processing_json_s3}")
+
 
 def read_json_as_dict(filepath: str) -> dict:
     """

@@ -9,20 +9,16 @@ import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from math import ceil
-from pathlib import Path
 from typing import List, Literal, Optional, Tuple, Union
 
 import dask.array as da
 import numba as nb
 import numpy as np
 import tensorstore as ts
-from aind_data_schema.core.processing import DataProcess, ProcessName
 from dask.diagnostics import ProgressBar
 from dask.distributed import Client, LocalCluster
-from natsort import natsorted
 from scipy.ndimage import map_coordinates
 
-from . import __maintainers__, __pipeline_version__, __url__, __version__
 from .array_to_zarr import convert_array_to_zarr
 from .utils import utils
 
@@ -87,7 +83,8 @@ def _compute_coordinates(
         How much to "pull in" corners beyond the cutoff.
 
     edge: int
-        Number of pixels to crop from each side (e.g., due to interpolation instability).
+        Number of pixels to crop from each side (e.g.,
+        due to interpolation instability).
     """
     # coords[0] -> y-coordinates relative to center
     # coords[1] -> x-coordinates relative to center
@@ -171,11 +168,13 @@ def radial_correction(
     frac_cutoff : Optional[float]
         Fraction of the radius to begin applying correction (default is 0.5).
     mode : Union[Literal["2d"], Literal["3d"]]
-        Processing mode - "2d" for plane-wise processing or "3d" for full volume (default is "3d").
+        Processing mode - "2d" for plane-wise processing or "3d"
+        for full volume (default is "3d").
     order : int
         Interpolation order for map_coordinates (default is 1).
     max_workers : Optional[int]
-        Maximum number of worker threads for parallel processing (default is None, which uses CPU count).
+        Maximum number of worker threads for parallel processing (default is
+        None, which uses CPU count).
 
     Returns
     -------
@@ -205,7 +204,6 @@ def radial_correction(
             for z, processed_plane in executor.map(
                 lambda args: _process_plane(args), tasks
             ):
-                # print(f"Tile data dtype: {tile_data[z].dtype} - Processed: {processed_plane.dtype}")
                 result[z] = processed_plane
 
         return result
@@ -283,7 +281,8 @@ async def read_zarr_tensorstore(
     Parameters
     ----------
     dataset_path: str
-        Path where the dataset is stored. Can be a local path or an S3 path (s3://...)
+        Path where the dataset is stored. Can be a local path
+        or an S3 path (s3://...)
     scale: str
         Multiscale to load
     driver: Optional[str]
@@ -386,7 +385,6 @@ def apply_corr_to_zarr_tile(
     data_in_memory, lazy_array = asyncio.run(
         read_zarr_tensorstore(dataset_path, scale=scale, driver=driver)
     )
-    # data_in_memory, lazy_array = read_zarr(f"{dataset_path}/{scale}", compute=True)
     data_in_memory = data_in_memory.squeeze()
     z_size = data_in_memory.shape[-3]
 
@@ -407,9 +405,6 @@ def apply_corr_to_zarr_tile(
         order=order,
         max_workers=max_workers,
     )
-
-    # print(f"input radial correction: {data_in_memory.shape} - {data_in_memory.dtype}")
-    # print(f"Output radial correction: {output_radial.shape} - {output_radial.dtype}")
 
     return output_radial
 
@@ -463,7 +458,8 @@ def correct_and_save_tile(
     )
     end_time = time.time()
     LOGGER.info(
-        f"Time to correct: {end_time - start_time} seconds -> New shape {corrected_tile.shape}"
+        f"Time to correct: {end_time - start_time} seconds -> "
+        f"New shape {corrected_tile.shape}"
     )
 
     convert_array_to_zarr(
@@ -531,26 +527,17 @@ def main(
     )
     LOGGER.info(f"Voxel ZYX resolution: {zyx_voxel_size}")
 
-    data_processes = []
     for tilename in tilenames:
         curr_tilename = tilename
         zarr_path = f"{data_folder}/{tilename}"
         output_path = f"{results_folder}/{curr_tilename}"
-        data_process = correct_and_save_tile(
+        correct_and_save_tile(
             dataset_loc=zarr_path,
             output_path=output_path,
             resolution_zyx=zyx_voxel_size,
-            n_lvls = 6,
+            n_lvls=6,
             driver=driver,
         )
-
-    # utils.generate_processing(
-    #     data_processes=data_processes,
-    #     dest_processing=results_folder,
-    #     processor_full_name=__maintainers__[0],
-    #     pipeline_version=__pipeline_version__,
-    #     prefix='radial_correction'
-    # )
 
 
 if __name__ == "__main__":

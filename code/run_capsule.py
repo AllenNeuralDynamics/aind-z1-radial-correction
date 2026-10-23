@@ -4,24 +4,27 @@ to the data directory
 """
 
 import os
-import sys
-from pathlib import Path
 import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 
-from aind_z1_radial_correction import __version__, __maintainers__
 from aind_data_schema.base import _GenericModel
 from aind_data_schema.components.identifiers import Code
 from aind_data_schema.core.processing import DataProcess, ProcessStage
 from aind_data_schema_models.process_names import ProcessName
-
-from aind_z1_radial_correction import radial_correction
+from aind_z1_radial_correction import (
+    __maintainers__,
+    __version__,
+    radial_correction,
+)
 from aind_z1_radial_correction.utils import utils
 
 REPO_URL = "https://github.com/AllenNeuralDynamics/aind-z1-radial-correction"
 GIT_URL = f"{REPO_URL}.git"
 
+
 def fetch_main_commit_sha():
+    """Fetch the latest commit SHA from the repository's main branch."""
     try:
         result = subprocess.run(
             ["git", "ls-remote", GIT_URL, "refs/heads/main"],
@@ -32,11 +35,15 @@ def fetch_main_commit_sha():
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.split()[0]
 
-        print(f"[processing-metadata] Git SHA unavailable: {result.stderr.strip()}")
+        print(
+            f"[processing-metadata] Git SHA unavailable: "
+            f"{result.stderr.strip()}"
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"[processing-metadata] Git SHA unavailable: {exc}")
 
     return None
+
 
 def run():
     """
@@ -66,7 +73,8 @@ def run():
 
     if len(missing_files):
         raise ValueError(
-            f"We miss the following files in the capsule input: {missing_files}"
+            f"We miss the following files in the capsule input: "
+            f"{missing_files}"
         )
 
     radial_correction_parameters = utils.read_json_as_dict(
@@ -92,7 +100,8 @@ def run():
         dataset_name = data_description.get("name", None)
         if not dataset_name:
             raise ValueError(
-                f"Dataset name not found in data_description.json: {data_description_path}"
+                f"Dataset name not found in data_description.json: "
+                f"{data_description_path}"
             )
 
         write_folder = (
@@ -164,6 +173,7 @@ def run():
 
     else:
         print(f"Nothing to do! Tilenames: {tilenames}")
+
 
 if __name__ == "__main__":
     run()
