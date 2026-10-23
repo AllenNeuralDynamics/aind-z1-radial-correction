@@ -17,8 +17,9 @@ readme = "README.md"
 dynamic = ["version"]
 
 dependencies = [
-    'aind-hcr-data-transformation @ git+https://github.com/AllenNeuralDynamics/aind-hcr-data-transformation.git',
-    'aind-data-schema==1.4.0',
+    'aind-hcr-data-transformation @ git+https://github.com/AllenNeuralDynamics/aind-hcr-data-transformation.git@v0.0.5',
+    'aind-data-schema==2.9.0',
+    'aind-data-schema-models',
     'numcodecs==0.13.1',
     'numba==0.61.2',
     'tensorstore==0.1.72'
