@@ -23,4 +23,6 @@ jobs:
     - name: Run linter checks
       run: flake8 . && interrogate --verbose .
     - name: Run tests and coverage
-      run: coverage run -m unittest discover && coverage report
+      run: |
+        coverage run -m unittest discover -s code/tests -t code -v
+        coverage report

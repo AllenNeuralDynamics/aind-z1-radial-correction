@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import dask.array as da
-import numpy as np
 import zarr
 from aind_hcr_data_transformation.compress.czi_to_zarr import (
     _get_pyramid_metadata,
@@ -99,7 +98,7 @@ def convert_array_to_zarr(
     dataset_shape = extra_axes + dataset_shape
     chunk_size = ([1] * (5 - len(chunk_size))) + chunk_size
 
-    #verify that the chunksize is not larger than the dataset shape
+    # verify that the chunksize is not larger than the dataset shape
     for i, val in enumerate(dataset_shape):
         if chunk_size[i] > val:
             chunk_size[i] = val
@@ -123,20 +122,11 @@ def convert_array_to_zarr(
 
     root_group = safe_create_zarr_group(store=store)
 
-    # Using 1 thread since is in single machine.
-    # Avoiding the use of multithreaded due to GIL
-    if np.issubdtype(array.dtype, np.integer):
-        np_info_func = np.iinfo
-
-    else:
-        # Floating point
-        np_info_func = np.finfo
-
     # Getting min max metadata for the dtype
     channel_minmax = [
         (
-            np_info_func(array.dtype).min,
-            np_info_func(array.dtype).max,
+            int(0.0),
+            int(1.0),
         )
         for _ in range(dataset_shape[1])
     ]
@@ -145,7 +135,7 @@ def convert_array_to_zarr(
     # Ideally we would use da.percentile(image_data, (0.1, 95))
     # However, it would take so much time and resources and it is
     # not used that much on neuroglancer
-    channel_startend = [(90.0, 1200.0) for _ in range(dataset_shape[1])]
+    channel_startend = [(int(0), int(1.0)) for _ in range(dataset_shape[1])]
 
     # Writing OME-NGFF metadata
     scale_factor = [int(s) for s in scale_factor]
@@ -169,6 +159,7 @@ def convert_array_to_zarr(
         channel_startend=channel_startend,
         metadata=_get_pyramid_metadata(),
         final_chunksize=chunk_size,
+        origin=[0, 0, 0],
     )
 
     # Writing first multiscale by default

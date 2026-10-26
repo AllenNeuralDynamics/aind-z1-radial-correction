@@ -8,59 +8,68 @@ from pathlib import Path
 from typing import List
 from urllib.parse import urlparse
 
-from aind_data_schema.core.processing import (
-    DataProcess,
-    PipelineProcess,
-    Processing,
-)
+import boto3
+from aind_data_schema.core.processing import DataProcess, Processing
+from botocore.exceptions import ClientError
 from packaging import version
 
 
 def generate_processing(
     data_processes: List[DataProcess],
     dest_processing: str,
-    prefix: str,
-    processor_full_name: str,
-    pipeline_version: str,
+    processing_json_s3: str,
 ):
-    """
-    Generates data description for the output folder.
+    """Generate AIND v2 processing metadata and upload to S3."""
 
-    Parameters
-    ------------------------
-
-    data_processes: List[dict]
-        List with the processes aplied in the pipeline.
-
-    dest_processing: PathLike
-        Path where the processing file will be placed.
-
-    processor_full_name: str
-        Person in charged of running the pipeline
-        for this data asset
-
-    pipeline_version: str
-        Terastitcher pipeline version
-
-    """
-    # flake8: noqa: E501
-    processing_pipeline = PipelineProcess(
+    new_processing = Processing(
         data_processes=data_processes,
-        processor_full_name=processor_full_name,
-        pipeline_version=pipeline_version,
-        pipeline_url="",
-        note="Metadata for radial correction",
+        notes="Z1 radial correction metadata.",
     )
 
-    processing = Processing(
-        processing_pipeline=processing_pipeline,
-        notes="This processing only contains metadata about radial correction \
-            and needs to be compiled with other steps at the end",
+    processing = json.loads(new_processing.model_dump_json())
+
+    parsed = urlparse(processing_json_s3)
+    s3 = boto3.client("s3")
+
+    # Fetch existing processing.json from S3.
+    try:
+        obj = s3.get_object(
+            Bucket=parsed.netloc,
+            Key=parsed.path.lstrip("/"),
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] not in {"NoSuchKey", "404"}:
+            raise
+
+        print("[processing-metadata] Starting fresh.")
+
+    else:
+        body = obj["Body"]
+        try:
+            existing = json.loads(body.read().decode("utf-8"))
+        finally:
+            body.close()
+
+        if not isinstance(existing, dict) or not isinstance(
+            existing.get("data_processes"), list
+        ):
+            raise ValueError("Invalid existing processing.json")
+
+        # Preserve existing processing history and append radial correction.
+        existing["data_processes"].extend(processing["data_processes"])
+
+        processing = existing
+
+        print("[processing-metadata] Appended radial correction.")
+
+    s3.put_object(
+        Bucket=parsed.netloc,
+        Key=parsed.path.lstrip("/"),
+        Body=(json.dumps(processing, indent=3) + "\n").encode("utf-8"),
+        ContentType="application/json",
     )
 
-    processing.write_standard_file(
-        output_directory=dest_processing, prefix=prefix
-    )
+    print(f"[processing-metadata] Uploaded -> {processing_json_s3}")
 
 
 def read_json_as_dict(filepath: str) -> dict:
