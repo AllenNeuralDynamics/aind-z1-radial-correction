@@ -328,7 +328,6 @@ async def read_zarr_tensorstore(
     tile = await tile_lazy.read()
     return tile, tile_lazy
 
-
 def apply_corr_to_zarr_tile(
     dataset_path: str,
     scale: str,
@@ -338,67 +337,144 @@ def apply_corr_to_zarr_tile(
     order: Optional[int] = 1,
     max_workers: Optional[int] = None,
     driver: Optional[str] = "zarr",
+    flats_dir: str = "../data",
 ) -> np.ndarray:
     """
-    Load a Zarr tile, apply radial correction, and return corrected tile.
-
-    Parameters
-    ----------
-    dataset_path : str
-        Path to the Zarr file containing the tile.
-
-    scale: str
-        Multiscale to load the data
-
-    corner_shift : Optional[float]
-        The amount of shift to apply to corners (default is 5.5).
-
-    frac_cutoff : Optional[float]
-        The fractional radius where correction starts (default is 0.5).
-
-    z_size_threshold: Optional[int]
-        Threshold in which 3D radial correction is applied.
-
-    order: Optional[int]
-        Interpolation order.
-        Default: 1
-
-    max_workers: Optional[int]
-        Max number of workers.
-        Default: None
-
-    driver: Optional[str]
-        Zarr driver to read the data.
-        Default: zarr
-
-    Returns
-    -------
-    np.ndarray
-        The corrected tile.
+    Load a Zarr tile, apply its channel's flatfield and darkfield,
+    then apply radial correction.
     """
     if z_size_threshold < 0:
         raise ValueError(
-            f"Please, provide a correct threshold: {z_size_threshold}"
+            f"Please provide a nonnegative z_size_threshold: {z_size_threshold}"
         )
 
-    # Reading zarr dataset
-    data_in_memory, lazy_array = asyncio.run(
-        read_zarr_tensorstore(dataset_path, scale=scale, driver=driver)
+    if str(scale) != "0":
+        raise ValueError(
+            f"This function requires scale 0 calibration; received scale {scale}"
+        )
+
+    tile_name = Path(dataset_path.rstrip("/")).name
+    channel_match = re.search(r"_ch_(\d+)\.ome\.zarr$", tile_name)
+    if channel_match is None:
+        raise ValueError(f"Cannot determine channel from tile name: {tile_name}")
+
+    channel = channel_match.group(1)
+    # if flats_dir == "../data/flats":
+    #     worker_folders = list(Path("../data").glob("worker_[0-9]*"))
+    #     if len(worker_folders) != 1:
+    #         raise ValueError(
+    #             f"Expected one worker folder in ../data, found: {worker_folders}"
+    #         )
+    #     calibration_dir = Path("../data") / f"flats_{worker_folders[0].name}"
+    # else:
+    #     calibration_dir = Path(flats_dir)
+    calibration_dir = Path(flats_dir)
+
+    flat_path = calibration_dir / f"flatfield_ch_{channel}_level0.npy"
+    dark_path = calibration_dir / f"darkfield_ch_{channel}_level0.npy"
+    metadata_path = calibration_dir / f"flatfield_ch_{channel}.json"
+
+    with metadata_path.open("r") as handle:
+        metadata = json.load(handle)
+
+    # if metadata.get("guard", {}).get("ok") is not True:
+    #     raise ValueError(
+    #         f"Flatfield for channel {channel} did not pass its "
+    #         f"plausibility guard: {metadata_path}"
+    #     )
+
+    if metadata.get("guard", {}).get("ok") is not True:
+        LOGGER.warning(
+            "Channel %s failed flatfield plausibility checks; "
+            "applying the flatfield anyway. Reasons: %s",
+            channel,
+            metadata.get("guard", {}).get("reasons", []),
+        )
+
+    upsampled = metadata.get("upsampled")
+    if not upsampled or str(upsampled.get("level")) != "0":
+        raise ValueError(
+            f"Flatfield for channel {channel} has no level 0 calibration: "
+            f"{metadata_path}"
+        )
+
+    if Path(upsampled["flatfield_path"]).name != flat_path.name:
+        raise ValueError(f"Unexpected flatfield filename in {metadata_path}")
+
+    if Path(upsampled["darkfield_path"]).name != dark_path.name:
+        raise ValueError(f"Unexpected darkfield filename in {metadata_path}")
+
+    data_in_memory, _ = asyncio.run(
+        read_zarr_tensorstore(
+            dataset_path,
+            scale=str(scale),
+            driver=driver,
+        )
     )
-    data_in_memory = data_in_memory.squeeze()
-    z_size = data_in_memory.shape[-3]
+    data_in_memory = np.asarray(data_in_memory).squeeze()
 
-    output_radial = None
+    # Preserve a single-Z tile as a Z,Y,X array.
+    if data_in_memory.ndim == 2:
+        data_in_memory = data_in_memory[np.newaxis, :, :]
 
-    LOGGER.info(f"Dataset shape {data_in_memory.shape}")
+    if data_in_memory.ndim != 3:
+        raise ValueError(
+            f"Expected a Z,Y,X tile, got shape {data_in_memory.shape}"
+        )
 
-    mode = "2d"
+    input_dtype = data_in_memory.dtype
+    tile_yx_shape = data_in_memory.shape[-2:]
 
-    if z_size < z_size_threshold:
-        mode = "3d"
+    flatfield = np.load(
+        flat_path, allow_pickle=False
+    ).squeeze().astype(np.float32)
+
+    darkfield = np.load(
+        dark_path, allow_pickle=False
+    ).squeeze().astype(np.float32)
+
+    if flatfield.shape != tile_yx_shape:
+        raise ValueError(
+            f"{flat_path.name} has shape {flatfield.shape}; "
+            f"tile {tile_name} has Y,X shape {tile_yx_shape}"
+        )
+
+    if darkfield.shape != tile_yx_shape:
+        raise ValueError(
+            f"{dark_path.name} has shape {darkfield.shape}; "
+            f"tile {tile_name} has Y,X shape {tile_yx_shape}"
+        )
+
+    if tuple(upsampled["shape"]) != tile_yx_shape:
+        raise ValueError(
+            f"Calibration metadata shape {upsampled['shape']} does not "
+            f"match tile Y,X shape {tile_yx_shape}"
+        )
+
+    if not np.all(np.isfinite(flatfield)) or np.any(flatfield <= 0):
+        raise ValueError(f"Invalid flatfield values in {flat_path}")
+
+    if not np.all(np.isfinite(darkfield)):
+        raise ValueError(f"Invalid darkfield values in {dark_path}")
+
+    LOGGER.info(
+        "Applying flatfield %s and darkfield %s to %s",
+        flat_path.name,
+        dark_path.name,
+        tile_name,
+    )
+
+    # The saved BaSiC flatfield is already a multiplicative field.
+    # The saved darkfield is the camera pedestal removed before fitting.
+    flat_corrected = data_in_memory.astype(np.float32)
+    flat_corrected -= darkfield[np.newaxis, :, :]
+    flat_corrected /= flatfield[np.newaxis, :, :]
+
+    z_size = flat_corrected.shape[0]
+    mode = "3d" if z_size < z_size_threshold else "2d"
 
     output_radial = radial_correction(
-        tile_data=data_in_memory,
+        tile_data=flat_corrected,
         corner_shift=corner_shift,
         frac_cutoff=frac_cutoff,
         mode=mode,
@@ -406,7 +482,96 @@ def apply_corr_to_zarr_tile(
         max_workers=max_workers,
     )
 
+    # Match the existing pipeline's integer output, with one conversion
+    # after both corrections and interpolation are complete.
+    if np.issubdtype(input_dtype, np.integer):
+        limits = np.iinfo(input_dtype)
+        output_radial = np.clip(
+            np.rint(output_radial),
+            limits.min,
+            limits.max,
+        ).astype(input_dtype)
+
     return output_radial
+
+# def apply_corr_to_zarr_tile(
+#     dataset_path: str,
+#     scale: str,
+#     corner_shift: Optional[float] = 5.5,
+#     frac_cutoff: Optional[float] = 0.5,
+#     z_size_threshold: Optional[int] = 400,
+#     order: Optional[int] = 1,
+#     max_workers: Optional[int] = None,
+#     driver: Optional[str] = "zarr",
+# ) -> np.ndarray:
+#     """
+#     Load a Zarr tile, apply radial correction, and return corrected tile.
+
+#     Parameters
+#     ----------
+#     dataset_path : str
+#         Path to the Zarr file containing the tile.
+
+#     scale: str
+#         Multiscale to load the data
+
+#     corner_shift : Optional[float]
+#         The amount of shift to apply to corners (default is 5.5).
+
+#     frac_cutoff : Optional[float]
+#         The fractional radius where correction starts (default is 0.5).
+
+#     z_size_threshold: Optional[int]
+#         Threshold in which 3D radial correction is applied.
+
+#     order: Optional[int]
+#         Interpolation order.
+#         Default: 1
+
+#     max_workers: Optional[int]
+#         Max number of workers.
+#         Default: None
+
+#     driver: Optional[str]
+#         Zarr driver to read the data.
+#         Default: zarr
+
+#     Returns
+#     -------
+#     np.ndarray
+#         The corrected tile.
+#     """
+#     if z_size_threshold < 0:
+#         raise ValueError(
+#             f"Please, provide a correct threshold: {z_size_threshold}"
+#         )
+
+#     # Reading zarr dataset
+#     data_in_memory, lazy_array = asyncio.run(
+#         read_zarr_tensorstore(dataset_path, scale=scale, driver=driver)
+#     )
+#     data_in_memory = data_in_memory.squeeze()
+#     z_size = data_in_memory.shape[-3]
+
+#     output_radial = None
+
+#     LOGGER.info(f"Dataset shape {data_in_memory.shape}")
+
+#     mode = "2d"
+
+#     if z_size < z_size_threshold:
+#         mode = "3d"
+
+#     output_radial = radial_correction(
+#         tile_data=data_in_memory,
+#         corner_shift=corner_shift,
+#         frac_cutoff=frac_cutoff,
+#         mode=mode,
+#         order=order,
+#         max_workers=max_workers,
+#     )
+
+#     return output_radial
 
 
 def correct_and_save_tile(
