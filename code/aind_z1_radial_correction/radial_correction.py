@@ -10,7 +10,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from math import ceil
 from typing import List, Literal, Optional, Tuple, Union
-
+from pathlib import Path
 import dask.array as da
 import numba as nb
 import numpy as np
