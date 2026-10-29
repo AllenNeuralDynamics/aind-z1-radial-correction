@@ -363,15 +363,6 @@ def apply_corr_to_zarr_tile(
         raise ValueError(f"Cannot determine channel from tile name: {tile_name}")
 
     channel = channel_match.group(1)
-    # if flats_dir == "../data/flats":
-    #     worker_folders = list(Path("../data").glob("worker_[0-9]*"))
-    #     if len(worker_folders) != 1:
-    #         raise ValueError(
-    #             f"Expected one worker folder in ../data, found: {worker_folders}"
-    #         )
-    #     calibration_dir = Path("../data") / f"flats_{worker_folders[0].name}"
-    # else:
-    #     calibration_dir = Path(flats_dir)
     calibration_dir = Path(flats_dir)
 
     flat_path = calibration_dir / f"flatfield_ch_{channel}_level0.npy"
@@ -380,12 +371,6 @@ def apply_corr_to_zarr_tile(
 
     with metadata_path.open("r") as handle:
         metadata = json.load(handle)
-
-    # if metadata.get("guard", {}).get("ok") is not True:
-    #     raise ValueError(
-    #         f"Flatfield for channel {channel} did not pass its "
-    #         f"plausibility guard: {metadata_path}"
-    #     )
 
     if metadata.get("guard", {}).get("ok") is not True:
         LOGGER.warning(
@@ -497,85 +482,6 @@ def apply_corr_to_zarr_tile(
         ).astype(input_dtype)
 
     return output_radial
-
-# def apply_corr_to_zarr_tile(
-#     dataset_path: str,
-#     scale: str,
-#     corner_shift: Optional[float] = 5.5,
-#     frac_cutoff: Optional[float] = 0.5,
-#     z_size_threshold: Optional[int] = 400,
-#     order: Optional[int] = 1,
-#     max_workers: Optional[int] = None,
-#     driver: Optional[str] = "zarr",
-# ) -> np.ndarray:
-#     """
-#     Load a Zarr tile, apply radial correction, and return corrected tile.
-
-#     Parameters
-#     ----------
-#     dataset_path : str
-#         Path to the Zarr file containing the tile.
-
-#     scale: str
-#         Multiscale to load the data
-
-#     corner_shift : Optional[float]
-#         The amount of shift to apply to corners (default is 5.5).
-
-#     frac_cutoff : Optional[float]
-#         The fractional radius where correction starts (default is 0.5).
-
-#     z_size_threshold: Optional[int]
-#         Threshold in which 3D radial correction is applied.
-
-#     order: Optional[int]
-#         Interpolation order.
-#         Default: 1
-
-#     max_workers: Optional[int]
-#         Max number of workers.
-#         Default: None
-
-#     driver: Optional[str]
-#         Zarr driver to read the data.
-#         Default: zarr
-
-#     Returns
-#     -------
-#     np.ndarray
-#         The corrected tile.
-#     """
-#     if z_size_threshold < 0:
-#         raise ValueError(
-#             f"Please, provide a correct threshold: {z_size_threshold}"
-#         )
-
-#     # Reading zarr dataset
-#     data_in_memory, lazy_array = asyncio.run(
-#         read_zarr_tensorstore(dataset_path, scale=scale, driver=driver)
-#     )
-#     data_in_memory = data_in_memory.squeeze()
-#     z_size = data_in_memory.shape[-3]
-
-#     output_radial = None
-
-#     LOGGER.info(f"Dataset shape {data_in_memory.shape}")
-
-#     mode = "2d"
-
-#     if z_size < z_size_threshold:
-#         mode = "3d"
-
-#     output_radial = radial_correction(
-#         tile_data=data_in_memory,
-#         corner_shift=corner_shift,
-#         frac_cutoff=frac_cutoff,
-#         mode=mode,
-#         order=order,
-#         max_workers=max_workers,
-#     )
-
-#     return output_radial
 
 
 def correct_and_save_tile(
