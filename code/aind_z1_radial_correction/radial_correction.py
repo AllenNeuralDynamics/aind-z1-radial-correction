@@ -18,7 +18,6 @@ import numpy as np
 import tensorstore as ts
 from dask.diagnostics import ProgressBar
 from dask.distributed import Client, LocalCluster
-from natsort import natsorted
 from scipy.ndimage import map_coordinates
 import json
 import re
@@ -332,39 +331,18 @@ async def read_zarr_tensorstore(
     tile = await tile_lazy.read()
     return tile, tile_lazy
 
-def apply_corr_to_zarr_tile(
-    dataset_path: str,
-    scale: str,
-    corner_shift: Optional[float] = 5.5,
-    frac_cutoff: Optional[float] = 0.5,
-    z_size_threshold: Optional[int] = 400,
-    order: Optional[int] = 1,
-    max_workers: Optional[int] = None,
-    driver: Optional[str] = "zarr",
-    flats_dir: str = "../data",
-) -> np.ndarray:
-    """
-    Load a Zarr tile, apply its channel's flatfield and darkfield,
-    then apply radial correction.
-    """
-    if z_size_threshold < 0:
-        raise ValueError(
-            f"Please provide a nonnegative z_size_threshold: {z_size_threshold}"
-        )
 
-    if str(scale) != "0":
-        raise ValueError(
-            f"This function requires scale 0 calibration; received scale {scale}"
-        )
-
+def _read_channel_calibration(dataset_path, flats_dir):
+    """Read and validate the channel's level-zero calibration metadata."""
     tile_name = Path(dataset_path.rstrip("/")).name
     channel_match = re.search(r"_ch_(\d+)\.ome\.zarr$", tile_name)
     if channel_match is None:
-        raise ValueError(f"Cannot determine channel from tile name: {tile_name}")
+        raise ValueError(
+            f"Cannot determine channel from tile name: {tile_name}"
+        )
 
     channel = channel_match.group(1)
     calibration_dir = Path(flats_dir)
-
     flat_path = calibration_dir / f"flatfield_ch_{channel}_level0.npy"
     dark_path = calibration_dir / f"darkfield_ch_{channel}_level0.npy"
     metadata_path = calibration_dir / f"flatfield_ch_{channel}.json"
@@ -393,31 +371,16 @@ def apply_corr_to_zarr_tile(
     if Path(upsampled["darkfield_path"]).name != dark_path.name:
         raise ValueError(f"Unexpected darkfield filename in {metadata_path}")
 
-    data_in_memory, _ = asyncio.run(
-        read_zarr_tensorstore(
-            dataset_path,
-            scale=str(scale),
-            driver=driver,
-        )
-    )
-    data_in_memory = np.asarray(data_in_memory).squeeze()
+    return tile_name, flat_path, dark_path, upsampled
 
-    # Preserve a single-Z tile as a Z,Y,X array.
-    if data_in_memory.ndim == 2:
-        data_in_memory = data_in_memory[np.newaxis, :, :]
 
-    if data_in_memory.ndim != 3:
-        raise ValueError(
-            f"Expected a Z,Y,X tile, got shape {data_in_memory.shape}"
-        )
-
-    input_dtype = data_in_memory.dtype
-    tile_yx_shape = data_in_memory.shape[-2:]
-
+def _load_calibration_arrays(
+    flat_path, dark_path, tile_name, tile_yx_shape, upsampled
+):
+    """Load calibration arrays and validate their shapes and values."""
     flatfield = np.load(
         flat_path, allow_pickle=False
     ).squeeze().astype(np.float32)
-
     darkfield = np.load(
         dark_path, allow_pickle=False
     ).squeeze().astype(np.float32)
@@ -445,6 +408,64 @@ def apply_corr_to_zarr_tile(
 
     if not np.all(np.isfinite(darkfield)):
         raise ValueError(f"Invalid darkfield values in {dark_path}")
+
+    return flatfield, darkfield
+
+
+def apply_corr_to_zarr_tile(
+    dataset_path: str,
+    scale: str,
+    corner_shift: Optional[float] = 5.5,
+    frac_cutoff: Optional[float] = 0.5,
+    z_size_threshold: Optional[int] = 400,
+    order: Optional[int] = 1,
+    max_workers: Optional[int] = None,
+    driver: Optional[str] = "zarr",
+    flats_dir: str = "../data",
+) -> np.ndarray:
+    """
+    Load a Zarr tile, apply its channel's flatfield and darkfield,
+    then apply radial correction.
+    """
+    if z_size_threshold < 0:
+        raise ValueError(
+            "Please provide a nonnegative z_size_threshold: "
+            f"{z_size_threshold}"
+        )
+
+    if str(scale) != "0":
+        raise ValueError(
+            "This function requires scale 0 calibration; "
+            f"received scale {scale}"
+        )
+
+    tile_name, flat_path, dark_path, upsampled = _read_channel_calibration(
+        dataset_path, flats_dir
+    )
+
+    data_in_memory, _ = asyncio.run(
+        read_zarr_tensorstore(
+            dataset_path,
+            scale=str(scale),
+            driver=driver,
+        )
+    )
+    data_in_memory = np.asarray(data_in_memory).squeeze()
+
+    # Preserve a single-Z tile as a Z,Y,X array.
+    if data_in_memory.ndim == 2:
+        data_in_memory = data_in_memory[np.newaxis, :, :]
+
+    if data_in_memory.ndim != 3:
+        raise ValueError(
+            f"Expected a Z,Y,X tile, got shape {data_in_memory.shape}"
+        )
+
+    input_dtype = data_in_memory.dtype
+    tile_yx_shape = data_in_memory.shape[-2:]
+    flatfield, darkfield = _load_calibration_arrays(
+        flat_path, dark_path, tile_name, tile_yx_shape, upsampled
+    )
 
     LOGGER.info(
         "Applying flatfield %s and darkfield %s to %s",
