@@ -9,20 +9,19 @@ import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from math import ceil
-from pathlib import Path
 from typing import List, Literal, Optional, Tuple, Union
+from pathlib import Path
 
 import dask.array as da
 import numba as nb
 import numpy as np
 import tensorstore as ts
-from aind_data_schema.core.processing import DataProcess, ProcessName
 from dask.diagnostics import ProgressBar
 from dask.distributed import Client, LocalCluster
-from natsort import natsorted
 from scipy.ndimage import map_coordinates
+import json
+import re
 
-from . import __maintainers__, __pipeline_version__, __url__, __version__
 from .array_to_zarr import convert_array_to_zarr
 from .utils import utils
 
@@ -87,7 +86,8 @@ def _compute_coordinates(
         How much to "pull in" corners beyond the cutoff.
 
     edge: int
-        Number of pixels to crop from each side (e.g., due to interpolation instability).
+        Number of pixels to crop from each side (e.g.,
+        due to interpolation instability).
     """
     # coords[0] -> y-coordinates relative to center
     # coords[1] -> x-coordinates relative to center
@@ -171,11 +171,13 @@ def radial_correction(
     frac_cutoff : Optional[float]
         Fraction of the radius to begin applying correction (default is 0.5).
     mode : Union[Literal["2d"], Literal["3d"]]
-        Processing mode - "2d" for plane-wise processing or "3d" for full volume (default is "3d").
+        Processing mode - "2d" for plane-wise processing or "3d"
+        for full volume (default is "3d").
     order : int
         Interpolation order for map_coordinates (default is 1).
     max_workers : Optional[int]
-        Maximum number of worker threads for parallel processing (default is None, which uses CPU count).
+        Maximum number of worker threads for parallel processing (default is
+        None, which uses CPU count).
 
     Returns
     -------
@@ -205,7 +207,6 @@ def radial_correction(
             for z, processed_plane in executor.map(
                 lambda args: _process_plane(args), tasks
             ):
-                # print(f"Tile data dtype: {tile_data[z].dtype} - Processed: {processed_plane.dtype}")
                 result[z] = processed_plane
 
         return result
@@ -283,7 +284,8 @@ async def read_zarr_tensorstore(
     Parameters
     ----------
     dataset_path: str
-        Path where the dataset is stored. Can be a local path or an S3 path (s3://...)
+        Path where the dataset is stored. Can be a local path
+        or an S3 path (s3://...)
     scale: str
         Multiscale to load
     driver: Optional[str]
@@ -330,6 +332,86 @@ async def read_zarr_tensorstore(
     return tile, tile_lazy
 
 
+def _read_channel_calibration(dataset_path, flats_dir):
+    """Read and validate the channel's level-zero calibration metadata."""
+    tile_name = Path(dataset_path.rstrip("/")).name
+    channel_match = re.search(r"_ch_(\d+)\.ome\.zarr$", tile_name)
+    if channel_match is None:
+        raise ValueError(
+            f"Cannot determine channel from tile name: {tile_name}"
+        )
+
+    channel = channel_match.group(1)
+    calibration_dir = Path(flats_dir)
+    flat_path = calibration_dir / f"flatfield_ch_{channel}_level0.npy"
+    dark_path = calibration_dir / f"darkfield_ch_{channel}_level0.npy"
+    metadata_path = calibration_dir / f"flatfield_ch_{channel}.json"
+
+    with metadata_path.open("r") as handle:
+        metadata = json.load(handle)
+
+    if metadata.get("guard", {}).get("ok") is not True:
+        LOGGER.warning(
+            "Channel %s failed flatfield plausibility checks; "
+            "applying the flatfield anyway. Reasons: %s",
+            channel,
+            metadata.get("guard", {}).get("reasons", []),
+        )
+
+    upsampled = metadata.get("upsampled")
+    if not upsampled or str(upsampled.get("level")) != "0":
+        raise ValueError(
+            f"Flatfield for channel {channel} has no level 0 calibration: "
+            f"{metadata_path}"
+        )
+
+    if Path(upsampled["flatfield_path"]).name != flat_path.name:
+        raise ValueError(f"Unexpected flatfield filename in {metadata_path}")
+
+    if Path(upsampled["darkfield_path"]).name != dark_path.name:
+        raise ValueError(f"Unexpected darkfield filename in {metadata_path}")
+
+    return tile_name, flat_path, dark_path, upsampled
+
+
+def _load_calibration_arrays(
+    flat_path, dark_path, tile_name, tile_yx_shape, upsampled
+):
+    """Load calibration arrays and validate their shapes and values."""
+    flatfield = np.load(
+        flat_path, allow_pickle=False
+    ).squeeze().astype(np.float32)
+    darkfield = np.load(
+        dark_path, allow_pickle=False
+    ).squeeze().astype(np.float32)
+
+    if flatfield.shape != tile_yx_shape:
+        raise ValueError(
+            f"{flat_path.name} has shape {flatfield.shape}; "
+            f"tile {tile_name} has Y,X shape {tile_yx_shape}"
+        )
+
+    if darkfield.shape != tile_yx_shape:
+        raise ValueError(
+            f"{dark_path.name} has shape {darkfield.shape}; "
+            f"tile {tile_name} has Y,X shape {tile_yx_shape}"
+        )
+
+    if tuple(upsampled["shape"]) != tile_yx_shape:
+        raise ValueError(
+            f"Calibration metadata shape {upsampled['shape']} does not "
+            f"match tile Y,X shape {tile_yx_shape}"
+        )
+
+    if not np.all(np.isfinite(flatfield)) or np.any(flatfield <= 0):
+        raise ValueError(f"Invalid flatfield values in {flat_path}")
+
+    if not np.all(np.isfinite(darkfield)):
+        raise ValueError(f"Invalid darkfield values in {dark_path}")
+
+    return flatfield, darkfield
+
+
 def apply_corr_to_zarr_tile(
     dataset_path: str,
     scale: str,
@@ -339,68 +421,70 @@ def apply_corr_to_zarr_tile(
     order: Optional[int] = 1,
     max_workers: Optional[int] = None,
     driver: Optional[str] = "zarr",
+    flats_dir: str = "../data",
 ) -> np.ndarray:
     """
-    Load a Zarr tile, apply radial correction, and return corrected tile.
-
-    Parameters
-    ----------
-    dataset_path : str
-        Path to the Zarr file containing the tile.
-
-    scale: str
-        Multiscale to load the data
-
-    corner_shift : Optional[float]
-        The amount of shift to apply to corners (default is 5.5).
-
-    frac_cutoff : Optional[float]
-        The fractional radius where correction starts (default is 0.5).
-
-    z_size_threshold: Optional[int]
-        Threshold in which 3D radial correction is applied.
-
-    order: Optional[int]
-        Interpolation order.
-        Default: 1
-
-    max_workers: Optional[int]
-        Max number of workers.
-        Default: None
-
-    driver: Optional[str]
-        Zarr driver to read the data.
-        Default: zarr
-
-    Returns
-    -------
-    np.ndarray
-        The corrected tile.
+    Load a Zarr tile, apply its channel's flatfield and darkfield,
+    then apply radial correction.
     """
     if z_size_threshold < 0:
         raise ValueError(
-            f"Please, provide a correct threshold: {z_size_threshold}"
+            "Please provide a nonnegative z_size_threshold: "
+            f"{z_size_threshold}"
         )
 
-    # Reading zarr dataset
-    data_in_memory, lazy_array = asyncio.run(
-        read_zarr_tensorstore(dataset_path, scale=scale, driver=driver)
+    if str(scale) != "0":
+        raise ValueError(
+            "This function requires scale 0 calibration; "
+            f"received scale {scale}"
+        )
+
+    tile_name, flat_path, dark_path, upsampled = _read_channel_calibration(
+        dataset_path, flats_dir
     )
-    # data_in_memory, lazy_array = read_zarr(f"{dataset_path}/{scale}", compute=True)
-    data_in_memory = data_in_memory.squeeze()
-    z_size = data_in_memory.shape[-3]
 
-    output_radial = None
+    data_in_memory, _ = asyncio.run(
+        read_zarr_tensorstore(
+            dataset_path,
+            scale=str(scale),
+            driver=driver,
+        )
+    )
+    data_in_memory = np.asarray(data_in_memory).squeeze()
 
-    LOGGER.info(f"Dataset shape {data_in_memory.shape}")
+    # Preserve a single-Z tile as a Z,Y,X array.
+    if data_in_memory.ndim == 2:
+        data_in_memory = data_in_memory[np.newaxis, :, :]
 
-    mode = "2d"
+    if data_in_memory.ndim != 3:
+        raise ValueError(
+            f"Expected a Z,Y,X tile, got shape {data_in_memory.shape}"
+        )
 
-    if z_size < z_size_threshold:
-        mode = "3d"
+    input_dtype = data_in_memory.dtype
+    tile_yx_shape = data_in_memory.shape[-2:]
+    flatfield, darkfield = _load_calibration_arrays(
+        flat_path, dark_path, tile_name, tile_yx_shape, upsampled
+    )
+
+    LOGGER.info(
+        "Applying flatfield %s and darkfield %s to %s",
+        flat_path.name,
+        dark_path.name,
+        tile_name,
+    )
+
+    # The saved BaSiC flatfield is already a multiplicative field.
+    # The saved darkfield is the camera pedestal removed before fitting.
+    flat_corrected = data_in_memory.astype(np.float32)
+    flat_corrected -= darkfield[np.newaxis, :, :]
+    flat_corrected /= flatfield[np.newaxis, :, :]
+
+    z_size = flat_corrected.shape[0]
+    mode = "3d" if z_size < z_size_threshold else "2d"
 
     output_radial = radial_correction(
-        tile_data=data_in_memory,
+        tile_data=flat_corrected,
         corner_shift=corner_shift,
         frac_cutoff=frac_cutoff,
         mode=mode,
@@ -408,8 +492,15 @@ def apply_corr_to_zarr_tile(
         max_workers=max_workers,
     )
 
-    # print(f"input radial correction: {data_in_memory.shape} - {data_in_memory.dtype}")
-    # print(f"Output radial correction: {output_radial.shape} - {output_radial.dtype}")
+    # Match the existing pipeline's integer output, with one conversion
+    # after both corrections and interpolation are complete.
+    if np.issubdtype(input_dtype, np.integer):
+        limits = np.iinfo(input_dtype)
+        output_radial = np.clip(
+            np.rint(output_radial),
+            limits.min,
+            limits.max,
+        ).astype(input_dtype)
 
     return output_radial
 
@@ -463,7 +554,8 @@ def correct_and_save_tile(
     )
     end_time = time.time()
     LOGGER.info(
-        f"Time to correct: {end_time - start_time} seconds -> New shape {corrected_tile.shape}"
+        f"Time to correct: {end_time - start_time} seconds -> "
+        f"New shape {corrected_tile.shape}"
     )
 
     convert_array_to_zarr(
@@ -531,26 +623,17 @@ def main(
     )
     LOGGER.info(f"Voxel ZYX resolution: {zyx_voxel_size}")
 
-    data_processes = []
     for tilename in tilenames:
         curr_tilename = tilename
         zarr_path = f"{data_folder}/{tilename}"
         output_path = f"{results_folder}/{curr_tilename}"
-        data_process = correct_and_save_tile(
+        correct_and_save_tile(
             dataset_loc=zarr_path,
             output_path=output_path,
             resolution_zyx=zyx_voxel_size,
-            n_lvls = 6,
+            n_lvls=6,
             driver=driver,
         )
-
-    # utils.generate_processing(
-    #     data_processes=data_processes,
-    #     dest_processing=results_folder,
-    #     processor_full_name=__maintainers__[0],
-    #     pipeline_version=__pipeline_version__,
-    #     prefix='radial_correction'
-    # )
 
 
 if __name__ == "__main__":

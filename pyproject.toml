@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "aind-z1-radial-correction"
 description = "Generated from aind-library-template"
 license = {text = "MIT"}
-requires-python = ">=3.9.2"
+requires-python = ">=3.10"
 authors = [
     {name = "Allen Institute for Neural Dynamics"}
 ]
@@ -17,8 +17,9 @@ readme = "README.md"
 dynamic = ["version"]
 
 dependencies = [
-    'aind-hcr-data-transformation @ git+https://github.com/AllenNeuralDynamics/aind-hcr-data-transformation.git',
-    'aind-data-schema==1.4.0',
+    'aind-hcr-data-transformation @ git+https://github.com/AllenNeuralDynamics/aind-hcr-data-transformation.git@v0.0.5',
+    'aind-data-schema==2.9.0',
+    'aind-data-schema-models',
     'numcodecs==0.13.1',
     'numba==0.61.2',
     'tensorstore==0.1.72'
