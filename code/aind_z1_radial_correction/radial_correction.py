@@ -23,6 +23,7 @@ import json
 import re
 
 from .array_to_zarr import convert_array_to_zarr
+from .evaluation import evaluate_tile, plot_evaluation
 from .utils import utils
 
 logging.basicConfig(format="%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M")
@@ -422,10 +423,19 @@ def apply_corr_to_zarr_tile(
     max_workers: Optional[int] = None,
     driver: Optional[str] = "zarr",
     flats_dir: str = "../data",
+    qc_path: Optional[str] = None,
 ) -> np.ndarray:
     """
     Load a Zarr tile, apply its channel's flatfield and darkfield,
     then apply radial correction.
+
+    The darkfield is added back after the radial correction and before
+    rounding and clipping, so the output keeps the camera offset of the
+    raw data instead of being clipped at 0.
+
+    If ``qc_path`` is given, a quality-control figure (raw, after
+    flatfield, after flatfield + radial, radial brightness profile) is
+    saved there as a PNG. It must be a local path.
     """
     if z_size_threshold < 0:
         raise ValueError(
@@ -492,6 +502,19 @@ def apply_corr_to_zarr_tile(
         max_workers=max_workers,
     )
 
+    # Add the darkfield back before the integer conversion. After dark
+    # subtraction dim channels sit near 0, so clipping negatives at 0
+    # would turn the interpolation's radially varying noise level into
+    # intensity rings. The output keeps the camera offset, like the raw
+    # data. The darkfield is cropped to the warped output's edge crop.
+    # another option is to use the estimate of the channels' noise as a
+    # contant if the long tail is not wanted
+    crop_y = (darkfield.shape[0] - output_radial.shape[1]) // 2
+    crop_x = (darkfield.shape[1] - output_radial.shape[2]) // 2
+    rows = slice(crop_y, crop_y + output_radial.shape[1])
+    cols = slice(crop_x, crop_x + output_radial.shape[2])
+    output_radial += darkfield[np.newaxis, rows, cols]
+
     # Match the existing pipeline's integer output, with one conversion
     # after both corrections and interpolation are complete.
     if np.issubdtype(input_dtype, np.integer):
@@ -501,6 +524,17 @@ def apply_corr_to_zarr_tile(
             limits.min,
             limits.max,
         ).astype(input_dtype)
+
+    if qc_path is not None:
+        evaluation = evaluate_tile(
+            raw=data_in_memory,
+            corrected=output_radial,
+            flatfield=flatfield,
+            darkfield=darkfield,
+            frac_cutoff=frac_cutoff,
+        )
+        LOGGER.info("QC metrics for %s: %s", tile_name, evaluation["metrics"])
+        plot_evaluation(evaluation, qc_path, title=tile_name)
 
     return output_radial
 
@@ -512,6 +546,7 @@ def correct_and_save_tile(
     scale: str = "0",
     n_lvls: Optional[int] = 4,
     driver: Optional[str] = "zarr",
+    qc_dir: Optional[str] = None,
 ):
     """
     Corrects and saves a single tile.
@@ -539,6 +574,9 @@ def correct_and_save_tile(
     driver: Optional[str]
         Driver to read the data with tensorstore.
         Default: "zarr"
+    qc_dir: Optional[str]
+        Local folder for the quality-control figure of this tile.
+        Default: None (no figure)
     """
 
     corner_shift = calculate_corner_shift_from_pixel_size(resolution_zyx[1])
@@ -548,9 +586,20 @@ def correct_and_save_tile(
     LOGGER.info(f"Corner Shift: {corner_shift} pixels")
     LOGGER.info(f"Fraction Cutoff: {frac_cutoff}")
 
+    qc_path = None
+    if qc_dir is not None:
+        Path(qc_dir).mkdir(parents=True, exist_ok=True)
+        tile_name = Path(str(dataset_loc).rstrip("/")).name
+        qc_path = str(Path(qc_dir) / f"{tile_name}_radial_correction_qc.png")
+
     start_time = time.time()
     corrected_tile = apply_corr_to_zarr_tile(
-        dataset_loc, scale, corner_shift, frac_cutoff, driver=driver
+        dataset_loc,
+        scale,
+        corner_shift,
+        frac_cutoff,
+        driver=driver,
+        qc_path=qc_path,
     )
     end_time = time.time()
     LOGGER.info(
@@ -592,6 +641,7 @@ def main(
     acquisition_path: str,
     tilenames: List[str],
     driver: Optional[str] = "zarr",
+    qc_dir: Optional[str] = None,
 ):
     """
     Radial correction to multiple tiles
@@ -617,6 +667,10 @@ def main(
         Driver to read the data with tensorstore
         Default: "zarr"
 
+    qc_dir: Optional[str]
+        Local folder for one quality-control figure per tile.
+        Default: None (no figures)
+
     """
     zyx_voxel_size = utils.get_voxel_resolution(
         acquisition_path=acquisition_path
@@ -633,6 +687,7 @@ def main(
             resolution_zyx=zyx_voxel_size,
             n_lvls=6,
             driver=driver,
+            qc_dir=qc_dir,
         )
 
 

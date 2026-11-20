@@ -91,8 +91,12 @@ def run():
         "tensorstore_driver", "zarr3"
     )
     write_to_s3 = radial_correction_parameters.get("write_to_s3", True)
+    # QC figures are off unless requested; written to the local results
+    generate_qc = bool(radial_correction_parameters.get("generate_qc", False))
+    qc_dir = f"{results_folder}/radial_correction_qc" if generate_qc else None
 
     print(f"Worker ID: {worker_id} processing {len(tilenames)} tiles!")
+    print(f"QC figures: {qc_dir if generate_qc else 'off'}")
 
     write_folder = results_folder
     if bucket_name is not None and write_to_s3:
@@ -120,6 +124,7 @@ def run():
             acquisition_path=acquisition_path,
             tilenames=tilenames,
             driver=tensorstore_driver,
+            qc_dir=qc_dir,
         )
 
         end_time = datetime.now(timezone.utc)
@@ -150,6 +155,7 @@ def run():
                             corner_shift=4.3,
                             frac_cutoff=0.5,
                             n_lvls=6,
+                            generate_qc=generate_qc,
                         ),
                     ),
                     experimenters=__maintainers__,
