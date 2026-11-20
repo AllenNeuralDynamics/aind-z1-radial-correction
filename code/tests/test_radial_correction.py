@@ -158,6 +158,68 @@ class TestDarkfieldAddedBack(unittest.TestCase):
         self.assertTrue(qc_path.exists())
         self.assertGreater(qc_path.stat().st_size, 0)
 
+    def test_partial_calibration_raises(self):
+        """Only some calibration files present is an error."""
+        (Path(self.flats) / "darkfield_ch_405_level0.npy").unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.run_tile()
+
+
+class TestWithoutCalibration(unittest.TestCase):
+    """Without flatfield and darkfield only the radial correction runs."""
+
+    def setUp(self):
+        """Write a dim tile with an empty calibration folder."""
+        self.tmp = tempfile.TemporaryDirectory()
+        self.raw, flat, dark = dim_tile()
+        self.tile, flats = write_tile(self.tmp.name, self.raw, flat, dark)
+        for path in Path(flats).iterdir():
+            path.unlink()
+        self.flats = flats
+
+    def tearDown(self):
+        """Remove the temporary folder."""
+        self.tmp.cleanup()
+
+    def expected(self):
+        """Radial correction of the raw tile, rounded and clipped."""
+        warped = radial_correction(
+            self.raw.astype(np.float32),
+            corner_shift=CORNER_SHIFT,
+            frac_cutoff=FRAC_CUTOFF,
+            mode="2d",
+            order=1,
+        )
+        return np.clip(np.rint(warped), 0, 65535).astype(np.uint16)
+
+    def run_tile(self, flats_dir, **kwargs):
+        """Run the package entry point with the given calibration folder."""
+        return apply_corr_to_zarr_tile(
+            self.tile,
+            scale="0",
+            corner_shift=CORNER_SHIFT,
+            frac_cutoff=FRAC_CUTOFF,
+            driver="zarr",
+            flats_dir=flats_dir,
+            **kwargs,
+        )
+
+    def test_empty_calibration_folder(self):
+        """No files for the channel: radial correction of the raw data."""
+        out = self.run_tile(self.flats)
+        np.testing.assert_array_equal(out, self.expected())
+        self.assertEqual(int((out == 0).sum()), 0)
+
+    def test_no_calibration_folder(self):
+        """flats_dir=None: radial correction of the raw data."""
+        np.testing.assert_array_equal(self.run_tile(None), self.expected())
+
+    def test_qc_figure_without_calibration(self):
+        """The QC figure is written with only raw and radial stages."""
+        qc_path = Path(self.tmp.name) / "qc.png"
+        self.run_tile(None, qc_path=str(qc_path))
+        self.assertTrue(qc_path.exists())
+
 
 class TestEvaluation(unittest.TestCase):
     """Radial profile and ring artifact metrics."""

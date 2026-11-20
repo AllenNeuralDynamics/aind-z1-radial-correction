@@ -193,8 +193,8 @@ def ring_map(
 def evaluate_tile(
     raw: np.ndarray,
     corrected: np.ndarray,
-    flatfield: np.ndarray,
-    darkfield: np.ndarray,
+    flatfield: Optional[np.ndarray],
+    darkfield: Optional[np.ndarray],
     frac_cutoff: float,
 ) -> Dict:
     """
@@ -207,10 +207,12 @@ def evaluate_tile(
     corrected: np.ndarray
         Radially corrected output (Z, Y', X'), with the darkfield added
         back, as returned by ``apply_corr_to_zarr_tile``.
-    flatfield: np.ndarray
-        Flatfield (Y, X).
-    darkfield: np.ndarray
-        Darkfield (Y, X).
+    flatfield: Optional[np.ndarray]
+        Flatfield (Y, X), or None when no calibration was applied.
+    darkfield: Optional[np.ndarray]
+        Darkfield (Y, X), or None when no calibration was applied. Then
+        the stages are only "raw" and "after radial", and values include
+        the camera offset.
     frac_cutoff: float
         Fraction of the tile width where the warp starts.
 
@@ -225,17 +227,17 @@ def evaluate_tile(
         slice(edge, raw.shape[-2] - edge),
         slice(edge, raw.shape[-1] - edge),
     )
-    dark = darkfield[crop].astype(np.float32)
+    calibrated = flatfield is not None and darkfield is not None
+    dark = darkfield[crop].astype(np.float32) if calibrated else 0.0
     raw_mean = raw.mean(axis=0, dtype=np.float64)[crop].astype(np.float32)
+    out_mean = corrected.mean(axis=0, dtype=np.float64).astype(np.float32)
 
-    images = {
-        "raw": raw_mean - dark,
-        "after flatfield": (raw_mean - dark) / flatfield[crop],
-        "after flatfield + radial": corrected.mean(
-            axis=0, dtype=np.float64
-        ).astype(np.float32)
-        - dark,
-    }
+    images = {"raw": raw_mean - dark}
+    if calibrated:
+        images["after flatfield"] = (raw_mean - dark) / flatfield[crop]
+        images["after flatfield + radial"] = out_mean - dark
+    else:
+        images["after radial"] = out_mean
     cutoff = raw.shape[-1] * frac_cutoff
     profiles, metrics = {}, {}
     for stage, image in images.items():
@@ -254,6 +256,7 @@ def evaluate_tile(
         "cutoff": cutoff,
         "n_planes": raw.shape[0],
         "edge": edge,
+        "calibrated": calibrated,
     }
 
 
@@ -285,7 +288,7 @@ def plot_evaluation(
     maps = {k: ring_map(images[k].shape, edge, profiles[k]) for k in images}
 
     # Same contrast width for every image, each centred on its own median
-    ref = shown["after flatfield"]
+    ref = shown.get("after flatfield", shown["raw"])
     half = 0.5 * np.subtract(*np.percentile(ref, [99, 1]))
     # One colour scale for all ring maps: at least 10x the raw data's
     # ring artifact, so ordinary tissue and noise look pale and real
@@ -304,8 +307,16 @@ def plot_evaluation(
     band = (radii[window].min(), radii[window].max()) if window.any() else ()
 
     # Figure API, not pyplot: no global backend change, safe in threads
-    fig = Figure(figsize=(18, 12.5))
-    axs = fig.subplots(2, 3)
+    n_stages = len(shown)
+    fig = Figure(figsize=(6 * n_stages, 12.5))
+    axs = fig.subplots(2, n_stages)
+    # Room for the multi-line title; set before the colour bar is placed
+    fig.subplots_adjust(top=0.82)
+    value_label = (
+        "counts above dark"
+        if evaluation["calibrated"]
+        else "counts (offset included)"
+    )
     for j, (stage, image) in enumerate(shown.items()):
         centre = np.median(image)
         axs[0, j].imshow(
@@ -313,7 +324,7 @@ def plot_evaluation(
         )
         axs[0, j].set_title(
             f"{stage}\nmedian signal "
-            f"{metrics[f'median signal, {stage}']:.2f} counts above dark"
+            f"{metrics[f'median signal, {stage}']:.2f} {value_label}"
         )
         ring_im = axs[1, j].imshow(
             maps[stage], cmap=ring_cmap, vmin=-limit, vmax=limit
@@ -346,6 +357,12 @@ def plot_evaluation(
 
     fig.suptitle(
         (f"{title}\n" if title else "")
+        + (
+            ""
+            if evaluation["calibrated"]
+            else "No flatfield/darkfield provided: radial correction only; "
+            "values include the camera offset.\n"
+        )
         + "Good result: no red/blue circles appear after radial correction, "
         "and its ring artifact stays close to raw.\n"
         "Ring artifact = spread of the ring map between the orange dashed "

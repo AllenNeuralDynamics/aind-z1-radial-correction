@@ -333,8 +333,17 @@ async def read_zarr_tensorstore(
     return tile, tile_lazy
 
 
-def _read_channel_calibration(dataset_path, flats_dir):
-    """Read and validate the channel's level-zero calibration metadata."""
+def _read_channel_calibration(dataset_path, flats_dir=None):
+    """
+    Read and validate the channel's level-zero calibration metadata.
+
+    Returns None when no calibration is provided for the channel (no
+    ``flats_dir``, or none of its metadata, flatfield and darkfield
+    files exist). Raises if only some of those files exist.
+    """
+    if flats_dir is None:
+        return None
+
     tile_name = Path(dataset_path.rstrip("/")).name
     channel_match = re.search(r"_ch_(\d+)\.ome\.zarr$", tile_name)
     if channel_match is None:
@@ -347,6 +356,17 @@ def _read_channel_calibration(dataset_path, flats_dir):
     flat_path = calibration_dir / f"flatfield_ch_{channel}_level0.npy"
     dark_path = calibration_dir / f"darkfield_ch_{channel}_level0.npy"
     metadata_path = calibration_dir / f"flatfield_ch_{channel}.json"
+
+    calibration_files = [metadata_path, flat_path, dark_path]
+    missing = [path.name for path in calibration_files if not path.exists()]
+    if len(missing) == len(calibration_files):
+        return None
+    if missing:
+        raise FileNotFoundError(
+            f"Incomplete calibration for channel {channel} in "
+            f"{calibration_dir}: missing {missing}. Provide the metadata, "
+            "flatfield and darkfield together, or none of them."
+        )
 
     with metadata_path.open("r") as handle:
         metadata = json.load(handle)
@@ -422,20 +442,25 @@ def apply_corr_to_zarr_tile(
     order: Optional[int] = 1,
     max_workers: Optional[int] = None,
     driver: Optional[str] = "zarr",
-    flats_dir: str = "../data",
+    flats_dir: Optional[str] = "../data",
     qc_path: Optional[str] = None,
 ) -> np.ndarray:
     """
     Load a Zarr tile, apply its channel's flatfield and darkfield,
     then apply radial correction.
 
-    The darkfield is added back after the radial correction and before
-    rounding and clipping, so the output keeps the camera offset of the
-    raw data instead of being clipped at 0.
+    With calibration: darkfield subtraction, flatfield, radial
+    correction, darkfield added back, rounding and clipping to the input
+    dtype. Adding the darkfield back keeps the output on the camera
+    offset of the raw data instead of being clipped at 0.
 
-    If ``qc_path`` is given, a quality-control figure (raw, after
-    flatfield, after flatfield + radial, radial brightness profile) is
-    saved there as a PNG. It must be a local path.
+    Without calibration (``flats_dir`` is None or has no files for the
+    tile's channel): radial correction only, then rounding and clipping.
+    The raw data already sits on the camera offset, so nothing is
+    clipped. Partial calibration files raise an error.
+
+    If ``qc_path`` is given, a quality-control figure is saved there as
+    a PNG. It must be a local path.
     """
     if z_size_threshold < 0:
         raise ValueError(
@@ -449,9 +474,8 @@ def apply_corr_to_zarr_tile(
             f"received scale {scale}"
         )
 
-    tile_name, flat_path, dark_path, upsampled = _read_channel_calibration(
-        dataset_path, flats_dir
-    )
+    tile_name = Path(dataset_path.rstrip("/")).name
+    calibration = _read_channel_calibration(dataset_path, flats_dir)
 
     data_in_memory, _ = asyncio.run(
         read_zarr_tensorstore(
@@ -473,28 +497,38 @@ def apply_corr_to_zarr_tile(
 
     input_dtype = data_in_memory.dtype
     tile_yx_shape = data_in_memory.shape[-2:]
-    flatfield, darkfield = _load_calibration_arrays(
-        flat_path, dark_path, tile_name, tile_yx_shape, upsampled
-    )
+    tile_float = data_in_memory.astype(np.float32)
+    flatfield = darkfield = None
 
-    LOGGER.info(
-        "Applying flatfield %s and darkfield %s to %s",
-        flat_path.name,
-        dark_path.name,
-        tile_name,
-    )
+    if calibration is None:
+        LOGGER.warning(
+            "No flatfield and darkfield for %s in %s; "
+            "running radial correction only",
+            tile_name,
+            flats_dir,
+        )
+    else:
+        _, flat_path, dark_path, upsampled = calibration
+        flatfield, darkfield = _load_calibration_arrays(
+            flat_path, dark_path, tile_name, tile_yx_shape, upsampled
+        )
+        LOGGER.info(
+            "Applying flatfield %s and darkfield %s to %s",
+            flat_path.name,
+            dark_path.name,
+            tile_name,
+        )
+        # The saved BaSiC flatfield is already a multiplicative field.
+        # The saved darkfield is the camera pedestal removed before
+        # fitting.
+        tile_float -= darkfield[np.newaxis, :, :]
+        tile_float /= flatfield[np.newaxis, :, :]
 
-    # The saved BaSiC flatfield is already a multiplicative field.
-    # The saved darkfield is the camera pedestal removed before fitting.
-    flat_corrected = data_in_memory.astype(np.float32)
-    flat_corrected -= darkfield[np.newaxis, :, :]
-    flat_corrected /= flatfield[np.newaxis, :, :]
-
-    z_size = flat_corrected.shape[0]
+    z_size = tile_float.shape[0]
     mode = "3d" if z_size < z_size_threshold else "2d"
 
     output_radial = radial_correction(
-        tile_data=flat_corrected,
+        tile_data=tile_float,
         corner_shift=corner_shift,
         frac_cutoff=frac_cutoff,
         mode=mode,
@@ -509,11 +543,12 @@ def apply_corr_to_zarr_tile(
     # data. The darkfield is cropped to the warped output's edge crop.
     # another option is to use the estimate of the channels' noise as a
     # contant if the long tail is not wanted
-    crop_y = (darkfield.shape[0] - output_radial.shape[1]) // 2
-    crop_x = (darkfield.shape[1] - output_radial.shape[2]) // 2
-    rows = slice(crop_y, crop_y + output_radial.shape[1])
-    cols = slice(crop_x, crop_x + output_radial.shape[2])
-    output_radial += darkfield[np.newaxis, rows, cols]
+    if darkfield is not None:
+        crop_y = (darkfield.shape[0] - output_radial.shape[1]) // 2
+        crop_x = (darkfield.shape[1] - output_radial.shape[2]) // 2
+        rows = slice(crop_y, crop_y + output_radial.shape[1])
+        cols = slice(crop_x, crop_x + output_radial.shape[2])
+        output_radial += darkfield[np.newaxis, rows, cols]
 
     # Match the existing pipeline's integer output, with one conversion
     # after both corrections and interpolation are complete.
