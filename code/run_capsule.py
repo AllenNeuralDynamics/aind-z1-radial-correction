@@ -21,6 +21,23 @@ from aind_z1_radial_correction.utils import utils
 
 REPO_URL = "https://github.com/AllenNeuralDynamics/aind-z1-radial-correction"
 GIT_URL = f"{REPO_URL}.git"
+N_LVLS = 6  # multiscale levels written per tile
+
+
+def _validate_s3_parameters(bucket_name, write_to_s3, input_s3_dataset_path):
+    """Fail before processing if S3 input or output lacks a bucket."""
+    if bucket_name is not None:
+        return
+    if write_to_s3:
+        raise ValueError(
+            "write_to_s3 is true but no bucket_name was provided in "
+            "radial_correction_parameters.json"
+        )
+    if input_s3_dataset_path is not None:
+        raise ValueError(
+            "input_s3_dataset_path was provided without a bucket_name in "
+            "radial_correction_parameters.json"
+        )
 
 
 def fetch_main_commit_sha():
@@ -94,12 +111,21 @@ def run():
     # QC figures are off unless requested; written to the local results
     generate_qc = bool(radial_correction_parameters.get("generate_qc", False))
     qc_dir = f"{results_folder}/radial_correction_qc" if generate_qc else None
+    # Flatfield and darkfield files are read from the local data folder,
+    # also when the tiles themselves are read from S3
+    flats_dir = data_folder
+
+    if worker_id is None:
+        raise ValueError(
+            "worker_id is missing in radial_correction_parameters.json"
+        )
+    _validate_s3_parameters(bucket_name, write_to_s3, input_s3_dataset_path)
 
     print(f"Worker ID: {worker_id} processing {len(tilenames)} tiles!")
-    print(f"QC figures: {qc_dir if generate_qc else 'off'}")
+    print(f"QC figures: {qc_dir or 'off'}")
 
     write_folder = results_folder
-    if bucket_name is not None and write_to_s3:
+    if write_to_s3:
         data_description = utils.read_json_as_dict(data_description_path)
         dataset_name = data_description.get("name", None)
         if not dataset_name:
@@ -125,6 +151,8 @@ def run():
             tilenames=tilenames,
             driver=tensorstore_driver,
             qc_dir=qc_dir,
+            flats_dir=flats_dir,
+            n_lvls=N_LVLS,
         )
 
         end_time = datetime.now(timezone.utc)
@@ -137,6 +165,18 @@ def run():
 
         # Only worker 0 writes the shared processing.json.
         if int(worker_id) == 0:
+            # Record the parameters the package applied
+            xy_pixel_size = utils.get_voxel_resolution(acquisition_path)[1]
+            corner_shift = (
+                radial_correction.calculate_corner_shift_from_pixel_size(
+                    xy_pixel_size
+                )
+            )
+            frac_cutoff = (
+                radial_correction.calculate_frac_cutoff_from_pixel_size(
+                    xy_pixel_size
+                )
+            )
             data_processes = [
                 DataProcess(
                     process_type=ProcessName.IMAGE_RADIAL_CORRECTION,
@@ -152,9 +192,9 @@ def run():
                             input_location=str(data_folder),
                             output_location=str(write_folder),
                             tensorstore_driver=tensorstore_driver,
-                            corner_shift=4.3,
-                            frac_cutoff=0.5,
-                            n_lvls=6,
+                            corner_shift=corner_shift,
+                            frac_cutoff=frac_cutoff,
+                            n_lvls=N_LVLS,
                             generate_qc=generate_qc,
                         ),
                     ),

@@ -166,7 +166,8 @@ def radial_correction(
     Parameters
     ----------
     tile_data : np.ndarray
-        The 3D tile data (Z, Y, X) to be corrected.
+        The 3D tile data (Z, Y, X) to be corrected. The XY plane must
+        be square (Y == X).
     corner_shift : Optional[float]
         The amount of radial shift to apply (default is 5.5).
     frac_cutoff : Optional[float]
@@ -185,9 +186,15 @@ def radial_correction(
     np.ndarray
         The corrected tile.
     """
-    edge = ceil(corner_shift / np.sqrt(2)) + 1
     shape = tile_data.shape
-    pixels = shape[1]  # Assume square XY plane
+    if len(shape) != 3 or shape[1] != shape[2]:
+        raise ValueError(
+            "Radial correction needs a Z,Y,X tile with a square XY plane; "
+            f"got shape {shape}"
+        )
+
+    edge = ceil(corner_shift / np.sqrt(2)) + 1
+    pixels = shape[1]
     cutoff = pixels * frac_cutoff
 
     # Compute the warp to transform coordinates using numba
@@ -306,7 +313,7 @@ async def read_zarr_tensorstore(
         bucket = parsed_url.netloc
         # Remove leading slash if present
         key = parsed_url.path.lstrip("/")
-        print(parsed_url, bucket, key)
+        LOGGER.debug("Reading s3://%s/%s", bucket, key)
 
         ts_spec = {
             "driver": str(driver),
@@ -347,9 +354,13 @@ def _read_channel_calibration(dataset_path, flats_dir=None):
     tile_name = Path(dataset_path.rstrip("/")).name
     channel_match = re.search(r"_ch_(\d+)\.ome\.zarr$", tile_name)
     if channel_match is None:
-        raise ValueError(
-            f"Cannot determine channel from tile name: {tile_name}"
+        # Without a channel no calibration file can be matched
+        LOGGER.warning(
+            "Cannot determine the channel from tile name %s; "
+            "no flatfield and darkfield will be applied",
+            tile_name,
         )
+        return None
 
     channel = channel_match.group(1)
     calibration_dir = Path(flats_dir)
@@ -552,12 +563,27 @@ def apply_corr_to_zarr_tile(
 
     # Match the existing pipeline's integer output, with one conversion
     # after both corrections and interpolation are complete.
+    saturated_fraction = 0.0
     if np.issubdtype(input_dtype, np.integer):
         limits = np.iinfo(input_dtype)
+        output_radial = np.rint(output_radial)
+
+        # Values above the dtype maximum are clipped; the flatfield can
+        # push bright corner pixels there. Report it, the data is kept.
+        n_saturated = int(np.count_nonzero(output_radial > limits.max))
+        saturated_fraction = n_saturated / output_radial.size
+        if n_saturated:
+            LOGGER.warning(
+                "%s: %d voxels (%.4f%%) exceed %d after correction and "
+                "are clipped to it",
+                tile_name,
+                n_saturated,
+                100 * saturated_fraction,
+                limits.max,
+            )
+
         output_radial = np.clip(
-            np.rint(output_radial),
-            limits.min,
-            limits.max,
+            output_radial, limits.min, limits.max, out=output_radial
         ).astype(input_dtype)
 
     if qc_path is not None:
@@ -567,6 +593,7 @@ def apply_corr_to_zarr_tile(
             flatfield=flatfield,
             darkfield=darkfield,
             frac_cutoff=frac_cutoff,
+            saturated_fraction=saturated_fraction,
         )
         LOGGER.info("QC metrics for %s: %s", tile_name, evaluation["metrics"])
         plot_evaluation(evaluation, qc_path, title=tile_name)
@@ -582,6 +609,7 @@ def correct_and_save_tile(
     n_lvls: Optional[int] = 4,
     driver: Optional[str] = "zarr",
     qc_dir: Optional[str] = None,
+    flats_dir: Optional[str] = "../data",
 ):
     """
     Corrects and saves a single tile.
@@ -591,7 +619,7 @@ def correct_and_save_tile(
     dataset_loc: str
         Path to the dataset to be corrected.
     output_path: str
-        Path to save the corrected dataset.
+        Path to save the corrected dataset, local or S3.
     resolution_zyx: List[float]
         Voxel size in the format [z, y, x].
     scale: str
@@ -600,18 +628,16 @@ def correct_and_save_tile(
     n_lvls: Optional[int]
         Number of downsampled levels to write.
         Default: 4
-    s3_output_path: str
-        Dataset name in S3.
-        Default: None
-    cloud_write: bool
-        If True, write to S3.
-        Default: True
     driver: Optional[str]
         Driver to read the data with tensorstore.
         Default: "zarr"
     qc_dir: Optional[str]
         Local folder for the quality-control figure of this tile.
         Default: None (no figure)
+    flats_dir: Optional[str]
+        Local folder with the flatfield and darkfield calibration. None,
+        or no files for the tile's channel, runs radial correction only.
+        Default: "../data"
     """
 
     corner_shift = calculate_corner_shift_from_pixel_size(resolution_zyx[1])
@@ -634,6 +660,7 @@ def correct_and_save_tile(
         corner_shift,
         frac_cutoff,
         driver=driver,
+        flats_dir=flats_dir,
         qc_path=qc_path,
     )
     end_time = time.time()
@@ -677,10 +704,11 @@ def main(
     tilenames: List[str],
     driver: Optional[str] = "zarr",
     qc_dir: Optional[str] = None,
+    flats_dir: Optional[str] = "../data",
+    n_lvls: int = 6,
 ):
     """
-    Radial correction to multiple tiles
-    based on provided YMLs.
+    Radial correction of multiple tiles.
 
     Parameters
     ----------
@@ -706,6 +734,14 @@ def main(
         Local folder for one quality-control figure per tile.
         Default: None (no figures)
 
+    flats_dir: Optional[str]
+        Local folder with the flatfield and darkfield calibration.
+        Default: "../data"
+
+    n_lvls: int
+        Number of multiscale levels written per tile.
+        Default: 6
+
     """
     zyx_voxel_size = utils.get_voxel_resolution(
         acquisition_path=acquisition_path
@@ -720,9 +756,10 @@ def main(
             dataset_loc=zarr_path,
             output_path=output_path,
             resolution_zyx=zyx_voxel_size,
-            n_lvls=6,
+            n_lvls=n_lvls,
             driver=driver,
             qc_dir=qc_dir,
+            flats_dir=flats_dir,
         )
 
 

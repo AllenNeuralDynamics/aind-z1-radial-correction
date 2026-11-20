@@ -196,6 +196,7 @@ def evaluate_tile(
     flatfield: Optional[np.ndarray],
     darkfield: Optional[np.ndarray],
     frac_cutoff: float,
+    saturated_fraction: float = 0.0,
 ) -> Dict:
     """
     Compute the quality-control images and metrics for one tile.
@@ -215,6 +216,9 @@ def evaluate_tile(
         the camera offset.
     frac_cutoff: float
         Fraction of the tile width where the warp starts.
+    saturated_fraction: float
+        Fraction of voxels that exceeded the dtype maximum before the
+        integer conversion and were clipped to it. Default: 0.0
 
     Returns
     -------
@@ -248,6 +252,7 @@ def evaluate_tile(
             radii, profile, cutoff
         )
     metrics["voxels clipped to 0 (%)"] = float(100 * np.mean(corrected == 0))
+    metrics["voxels saturated at max (%)"] = float(100 * saturated_fraction)
     profiles["radii"] = radii
     return {
         "images": images,
@@ -367,7 +372,9 @@ def plot_evaluation(
         "and its ring artifact stays close to raw.\n"
         "Ring artifact = spread of the ring map between the orange dashed "
         "circles, where the warp moves pixels. "
-        f"Voxels clipped to 0: {metrics['voxels clipped to 0 (%)']:.2f}%.\n"
+        f"Voxels clipped to 0: {metrics['voxels clipped to 0 (%)']:.2f}%, "
+        "saturated at max: "
+        f"{metrics['voxels saturated at max (%)']:.2f}%.\n"
         f"Images are the average of {evaluation['n_planes']} planes: rings "
         "are hidden by the noise in a single plane, and averaging makes "
         "them visible.",

@@ -8,7 +8,6 @@ from pathlib import Path
 
 import numpy as np
 import tensorstore as ts
-
 from aind_z1_radial_correction.evaluation import (
     evaluate_tile,
     plot_evaluation,
@@ -19,15 +18,16 @@ from aind_z1_radial_correction.radial_correction import (
     apply_corr_to_zarr_tile,
     radial_correction,
 )
+from aind_z1_radial_correction.utils import utils
 
 CORNER_SHIFT = 4.3
 FRAC_CUTOFF = 0.5
 TILE = "Tile_X_0000_Y_0000_Z_0000_ch_405.ome.zarr"
 
 
-def write_tile(folder, raw, flatfield, darkfield):
+def write_tile(folder, raw, flatfield, darkfield, tile_name=TILE):
     """Write a uint16 tile and its calibration as the pipeline expects."""
-    tile_path = Path(folder) / TILE
+    tile_path = Path(folder) / tile_name
     array = ts.open(
         {
             "driver": "zarr",
@@ -158,6 +158,26 @@ class TestDarkfieldAddedBack(unittest.TestCase):
         self.assertTrue(qc_path.exists())
         self.assertGreater(qc_path.stat().st_size, 0)
 
+    def test_saturation_is_reported(self):
+        """Values pushed above uint16 by the flatfield are logged."""
+        n = 64
+        raw = np.full((2, n, n), 40000, dtype=np.uint16)
+        flat = np.full((n, n), 0.5)
+        dark = np.full((n, n), 90.0)
+        with tempfile.TemporaryDirectory() as folder:
+            tile, flats = write_tile(folder, raw, flat, dark)
+            with self.assertLogs(level="WARNING") as logs:
+                out = apply_corr_to_zarr_tile(
+                    tile,
+                    scale="0",
+                    corner_shift=CORNER_SHIFT,
+                    frac_cutoff=FRAC_CUTOFF,
+                    driver="zarr",
+                    flats_dir=flats,
+                )
+        self.assertTrue(any("exceed 65535" in m for m in logs.output))
+        self.assertEqual(int(out.max()), 65535)
+
     def test_partial_calibration_raises(self):
         """Only some calibration files present is an error."""
         (Path(self.flats) / "darkfield_ch_405_level0.npy").unlink()
@@ -214,11 +234,90 @@ class TestWithoutCalibration(unittest.TestCase):
         """flats_dir=None: radial correction of the raw data."""
         np.testing.assert_array_equal(self.run_tile(None), self.expected())
 
+    def test_tile_name_without_channel(self):
+        """A name without a channel cannot match calibration: radial only."""
+        with tempfile.TemporaryDirectory() as folder:
+            tile, flats = write_tile(
+                folder,
+                self.raw,
+                np.ones(self.raw.shape[1:]),
+                np.zeros(self.raw.shape[1:]),
+                tile_name="Tile_X_0000_Y_0000_Z_0000.ome.zarr",
+            )
+            out = apply_corr_to_zarr_tile(
+                tile,
+                scale="0",
+                corner_shift=CORNER_SHIFT,
+                frac_cutoff=FRAC_CUTOFF,
+                driver="zarr",
+                flats_dir=flats,
+            )
+        np.testing.assert_array_equal(out, self.expected())
+
     def test_qc_figure_without_calibration(self):
         """The QC figure is written with only raw and radial stages."""
         qc_path = Path(self.tmp.name) / "qc.png"
         self.run_tile(None, qc_path=str(qc_path))
         self.assertTrue(qc_path.exists())
+
+
+class TestInputsAndMetadata(unittest.TestCase):
+    """Input checks and processing metadata."""
+
+    def test_non_square_tile_raises(self):
+        """Radial correction needs a square XY plane."""
+        with self.assertRaises(ValueError):
+            radial_correction(np.zeros((2, 64, 80), np.float32))
+
+    def test_saturation_metric(self):
+        """The saturated fraction is reported in the QC metrics."""
+        raw, flat, dark = dim_tile(n=64, z=2)
+        edge = ceil(CORNER_SHIFT / np.sqrt(2)) + 1
+        corrected = raw[:, edge:-edge, edge:-edge]
+        evaluation = evaluate_tile(
+            raw, corrected, flat, dark, 0.5, saturated_fraction=0.25
+        )
+        self.assertEqual(
+            evaluation["metrics"]["voxels saturated at max (%)"], 25.0
+        )
+
+    def test_processing_written_locally_without_s3(self):
+        """Without an S3 destination processing.json is written locally."""
+        from datetime import datetime, timezone
+
+        from aind_data_schema.components.identifiers import Code
+        from aind_data_schema.core.processing import (
+            DataProcess,
+            ProcessStage,
+        )
+        from aind_data_schema_models.process_names import ProcessName
+
+        now = datetime.now(timezone.utc)
+        process = DataProcess(
+            process_type=ProcessName.IMAGE_RADIAL_CORRECTION,
+            stage=ProcessStage.PROCESSING,
+            code=Code(url="https://github.com/AllenNeuralDynamics"),
+            experimenters=["test"],
+            start_date_time=now,
+            end_date_time=now,
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            utils.generate_processing([process], folder, None)
+            written = json.loads(
+                (Path(folder) / "processing.json").read_text()
+            )
+        self.assertEqual(len(written["data_processes"]), 1)
+
+    def test_s3_parameters_need_a_bucket(self):
+        """S3 input or output without a bucket fails before processing."""
+        from run_capsule import _validate_s3_parameters
+
+        with self.assertRaises(ValueError):
+            _validate_s3_parameters(None, True, None)
+        with self.assertRaises(ValueError):
+            _validate_s3_parameters(None, False, "dataset/SPIM")
+        _validate_s3_parameters(None, False, None)
+        _validate_s3_parameters("bucket", True, "dataset/SPIM")
 
 
 class TestEvaluation(unittest.TestCase):

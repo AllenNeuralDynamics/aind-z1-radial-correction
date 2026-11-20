@@ -5,7 +5,7 @@ Utility functions for the radial correction step
 import json
 import os
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from urllib.parse import urlparse
 
 import boto3
@@ -17,9 +17,16 @@ from packaging import version
 def generate_processing(
     data_processes: List[DataProcess],
     dest_processing: str,
-    processing_json_s3: str,
+    processing_json_s3: Optional[str],
 ):
-    """Generate AIND v2 processing metadata and upload to S3."""
+    """
+    Generate AIND v2 processing metadata.
+
+    With ``processing_json_s3`` the radial correction is appended to the
+    dataset's processing.json on S3. Without it (output not written to
+    S3) processing.json is written to the local ``dest_processing``
+    folder.
+    """
 
     new_processing = Processing(
         data_processes=data_processes,
@@ -27,6 +34,13 @@ def generate_processing(
     )
 
     processing = json.loads(new_processing.model_dump_json())
+
+    if processing_json_s3 is None:
+        local_path = Path(dest_processing) / "processing.json"
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        local_path.write_text(json.dumps(processing, indent=3) + "\n")
+        print(f"[processing-metadata] Written -> {local_path}")
+        return
 
     parsed = urlparse(processing_json_s3)
     s3 = boto3.client("s3")
