@@ -23,6 +23,7 @@ import json
 import re
 
 from .array_to_zarr import convert_array_to_zarr
+from .evaluation import evaluate_tile, plot_evaluation
 from .utils import utils
 
 logging.basicConfig(format="%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M")
@@ -165,7 +166,8 @@ def radial_correction(
     Parameters
     ----------
     tile_data : np.ndarray
-        The 3D tile data (Z, Y, X) to be corrected.
+        The 3D tile data (Z, Y, X) to be corrected. The XY plane must
+        be square (Y == X).
     corner_shift : Optional[float]
         The amount of radial shift to apply (default is 5.5).
     frac_cutoff : Optional[float]
@@ -184,9 +186,15 @@ def radial_correction(
     np.ndarray
         The corrected tile.
     """
-    edge = ceil(corner_shift / np.sqrt(2)) + 1
     shape = tile_data.shape
-    pixels = shape[1]  # Assume square XY plane
+    if len(shape) != 3 or shape[1] != shape[2]:
+        raise ValueError(
+            "Radial correction needs a Z,Y,X tile with a square XY plane; "
+            f"got shape {shape}"
+        )
+
+    edge = ceil(corner_shift / np.sqrt(2)) + 1
+    pixels = shape[1]
     cutoff = pixels * frac_cutoff
 
     # Compute the warp to transform coordinates using numba
@@ -305,7 +313,7 @@ async def read_zarr_tensorstore(
         bucket = parsed_url.netloc
         # Remove leading slash if present
         key = parsed_url.path.lstrip("/")
-        print(parsed_url, bucket, key)
+        LOGGER.debug("Reading s3://%s/%s", bucket, key)
 
         ts_spec = {
             "driver": str(driver),
@@ -332,20 +340,44 @@ async def read_zarr_tensorstore(
     return tile, tile_lazy
 
 
-def _read_channel_calibration(dataset_path, flats_dir):
-    """Read and validate the channel's level-zero calibration metadata."""
+def _read_channel_calibration(dataset_path, flats_dir=None):
+    """
+    Read and validate the channel's level-zero calibration metadata.
+
+    Returns None when no calibration is provided for the channel (no
+    ``flats_dir``, or none of its metadata, flatfield and darkfield
+    files exist). Raises if only some of those files exist.
+    """
+    if flats_dir is None:
+        return None
+
     tile_name = Path(dataset_path.rstrip("/")).name
     channel_match = re.search(r"_ch_(\d+)\.ome\.zarr$", tile_name)
     if channel_match is None:
-        raise ValueError(
-            f"Cannot determine channel from tile name: {tile_name}"
+        # Without a channel no calibration file can be matched
+        LOGGER.warning(
+            "Cannot determine the channel from tile name %s; "
+            "no flatfield and darkfield will be applied",
+            tile_name,
         )
+        return None
 
     channel = channel_match.group(1)
     calibration_dir = Path(flats_dir)
     flat_path = calibration_dir / f"flatfield_ch_{channel}_level0.npy"
     dark_path = calibration_dir / f"darkfield_ch_{channel}_level0.npy"
     metadata_path = calibration_dir / f"flatfield_ch_{channel}.json"
+
+    calibration_files = [metadata_path, flat_path, dark_path]
+    missing = [path.name for path in calibration_files if not path.exists()]
+    if len(missing) == len(calibration_files):
+        return None
+    if missing:
+        raise FileNotFoundError(
+            f"Incomplete calibration for channel {channel} in "
+            f"{calibration_dir}: missing {missing}. Provide the metadata, "
+            "flatfield and darkfield together, or none of them."
+        )
 
     with metadata_path.open("r") as handle:
         metadata = json.load(handle)
@@ -421,11 +453,25 @@ def apply_corr_to_zarr_tile(
     order: Optional[int] = 1,
     max_workers: Optional[int] = None,
     driver: Optional[str] = "zarr",
-    flats_dir: str = "../data",
+    flats_dir: Optional[str] = "../data",
+    qc_path: Optional[str] = None,
 ) -> np.ndarray:
     """
     Load a Zarr tile, apply its channel's flatfield and darkfield,
     then apply radial correction.
+
+    With calibration: darkfield subtraction, flatfield, radial
+    correction, darkfield added back, rounding and clipping to the input
+    dtype. Adding the darkfield back keeps the output on the camera
+    offset of the raw data instead of being clipped at 0.
+
+    Without calibration (``flats_dir`` is None or has no files for the
+    tile's channel): radial correction only, then rounding and clipping.
+    The raw data already sits on the camera offset, so nothing is
+    clipped. Partial calibration files raise an error.
+
+    If ``qc_path`` is given, a quality-control figure is saved there as
+    a PNG. It must be a local path.
     """
     if z_size_threshold < 0:
         raise ValueError(
@@ -439,9 +485,8 @@ def apply_corr_to_zarr_tile(
             f"received scale {scale}"
         )
 
-    tile_name, flat_path, dark_path, upsampled = _read_channel_calibration(
-        dataset_path, flats_dir
-    )
+    tile_name = Path(dataset_path.rstrip("/")).name
+    calibration = _read_channel_calibration(dataset_path, flats_dir)
 
     data_in_memory, _ = asyncio.run(
         read_zarr_tensorstore(
@@ -463,28 +508,38 @@ def apply_corr_to_zarr_tile(
 
     input_dtype = data_in_memory.dtype
     tile_yx_shape = data_in_memory.shape[-2:]
-    flatfield, darkfield = _load_calibration_arrays(
-        flat_path, dark_path, tile_name, tile_yx_shape, upsampled
-    )
+    tile_float = data_in_memory.astype(np.float32)
+    flatfield = darkfield = None
 
-    LOGGER.info(
-        "Applying flatfield %s and darkfield %s to %s",
-        flat_path.name,
-        dark_path.name,
-        tile_name,
-    )
+    if calibration is None:
+        LOGGER.warning(
+            "No flatfield and darkfield for %s in %s; "
+            "running radial correction only",
+            tile_name,
+            flats_dir,
+        )
+    else:
+        _, flat_path, dark_path, upsampled = calibration
+        flatfield, darkfield = _load_calibration_arrays(
+            flat_path, dark_path, tile_name, tile_yx_shape, upsampled
+        )
+        LOGGER.info(
+            "Applying flatfield %s and darkfield %s to %s",
+            flat_path.name,
+            dark_path.name,
+            tile_name,
+        )
+        # The saved BaSiC flatfield is already a multiplicative field.
+        # The saved darkfield is the camera pedestal removed before
+        # fitting.
+        tile_float -= darkfield[np.newaxis, :, :]
+        tile_float /= flatfield[np.newaxis, :, :]
 
-    # The saved BaSiC flatfield is already a multiplicative field.
-    # The saved darkfield is the camera pedestal removed before fitting.
-    flat_corrected = data_in_memory.astype(np.float32)
-    flat_corrected -= darkfield[np.newaxis, :, :]
-    flat_corrected /= flatfield[np.newaxis, :, :]
-
-    z_size = flat_corrected.shape[0]
+    z_size = tile_float.shape[0]
     mode = "3d" if z_size < z_size_threshold else "2d"
 
     output_radial = radial_correction(
-        tile_data=flat_corrected,
+        tile_data=tile_float,
         corner_shift=corner_shift,
         frac_cutoff=frac_cutoff,
         mode=mode,
@@ -492,15 +547,56 @@ def apply_corr_to_zarr_tile(
         max_workers=max_workers,
     )
 
+    # Add the darkfield back before the integer conversion. After dark
+    # subtraction dim channels sit near 0, so clipping negatives at 0
+    # would turn the interpolation's radially varying noise level into
+    # intensity rings. The output keeps the camera offset, like the raw
+    # data. The darkfield is cropped to the warped output's edge crop.
+    # another option is to use the estimate of the channels' noise as a
+    # contant if the long tail is not wanted
+    if darkfield is not None:
+        crop_y = (darkfield.shape[0] - output_radial.shape[1]) // 2
+        crop_x = (darkfield.shape[1] - output_radial.shape[2]) // 2
+        rows = slice(crop_y, crop_y + output_radial.shape[1])
+        cols = slice(crop_x, crop_x + output_radial.shape[2])
+        output_radial += darkfield[np.newaxis, rows, cols]
+
     # Match the existing pipeline's integer output, with one conversion
     # after both corrections and interpolation are complete.
+    saturated_fraction = 0.0
     if np.issubdtype(input_dtype, np.integer):
         limits = np.iinfo(input_dtype)
+        output_radial = np.rint(output_radial)
+
+        # Values above the dtype maximum are clipped; the flatfield can
+        # push bright corner pixels there. Report it, the data is kept.
+        n_saturated = int(np.count_nonzero(output_radial > limits.max))
+        saturated_fraction = n_saturated / output_radial.size
+        if n_saturated:
+            LOGGER.warning(
+                "%s: %d voxels (%.4f%%) exceed %d after correction and "
+                "are clipped to it",
+                tile_name,
+                n_saturated,
+                100 * saturated_fraction,
+                limits.max,
+            )
+
         output_radial = np.clip(
-            np.rint(output_radial),
-            limits.min,
-            limits.max,
+            output_radial, limits.min, limits.max, out=output_radial
         ).astype(input_dtype)
+
+    if qc_path is not None:
+        evaluation = evaluate_tile(
+            raw=data_in_memory,
+            corrected=output_radial,
+            flatfield=flatfield,
+            darkfield=darkfield,
+            frac_cutoff=frac_cutoff,
+            saturated_fraction=saturated_fraction,
+        )
+        LOGGER.info("QC metrics for %s: %s", tile_name, evaluation["metrics"])
+        plot_evaluation(evaluation, qc_path, title=tile_name)
 
     return output_radial
 
@@ -512,6 +608,8 @@ def correct_and_save_tile(
     scale: str = "0",
     n_lvls: Optional[int] = 4,
     driver: Optional[str] = "zarr",
+    qc_dir: Optional[str] = None,
+    flats_dir: Optional[str] = "../data",
 ):
     """
     Corrects and saves a single tile.
@@ -521,7 +619,7 @@ def correct_and_save_tile(
     dataset_loc: str
         Path to the dataset to be corrected.
     output_path: str
-        Path to save the corrected dataset.
+        Path to save the corrected dataset, local or S3.
     resolution_zyx: List[float]
         Voxel size in the format [z, y, x].
     scale: str
@@ -530,15 +628,16 @@ def correct_and_save_tile(
     n_lvls: Optional[int]
         Number of downsampled levels to write.
         Default: 4
-    s3_output_path: str
-        Dataset name in S3.
-        Default: None
-    cloud_write: bool
-        If True, write to S3.
-        Default: True
     driver: Optional[str]
         Driver to read the data with tensorstore.
         Default: "zarr"
+    qc_dir: Optional[str]
+        Local folder for the quality-control figure of this tile.
+        Default: None (no figure)
+    flats_dir: Optional[str]
+        Local folder with the flatfield and darkfield calibration. None,
+        or no files for the tile's channel, runs radial correction only.
+        Default: "../data"
     """
 
     corner_shift = calculate_corner_shift_from_pixel_size(resolution_zyx[1])
@@ -548,9 +647,21 @@ def correct_and_save_tile(
     LOGGER.info(f"Corner Shift: {corner_shift} pixels")
     LOGGER.info(f"Fraction Cutoff: {frac_cutoff}")
 
+    qc_path = None
+    if qc_dir is not None:
+        Path(qc_dir).mkdir(parents=True, exist_ok=True)
+        tile_name = Path(str(dataset_loc).rstrip("/")).name
+        qc_path = str(Path(qc_dir) / f"{tile_name}_radial_correction_qc.png")
+
     start_time = time.time()
     corrected_tile = apply_corr_to_zarr_tile(
-        dataset_loc, scale, corner_shift, frac_cutoff, driver=driver
+        dataset_loc,
+        scale,
+        corner_shift,
+        frac_cutoff,
+        driver=driver,
+        flats_dir=flats_dir,
+        qc_path=qc_path,
     )
     end_time = time.time()
     LOGGER.info(
@@ -592,10 +703,12 @@ def main(
     acquisition_path: str,
     tilenames: List[str],
     driver: Optional[str] = "zarr",
+    qc_dir: Optional[str] = None,
+    flats_dir: Optional[str] = "../data",
+    n_lvls: int = 6,
 ):
     """
-    Radial correction to multiple tiles
-    based on provided YMLs.
+    Radial correction of multiple tiles.
 
     Parameters
     ----------
@@ -617,6 +730,18 @@ def main(
         Driver to read the data with tensorstore
         Default: "zarr"
 
+    qc_dir: Optional[str]
+        Local folder for one quality-control figure per tile.
+        Default: None (no figures)
+
+    flats_dir: Optional[str]
+        Local folder with the flatfield and darkfield calibration.
+        Default: "../data"
+
+    n_lvls: int
+        Number of multiscale levels written per tile.
+        Default: 6
+
     """
     zyx_voxel_size = utils.get_voxel_resolution(
         acquisition_path=acquisition_path
@@ -631,8 +756,10 @@ def main(
             dataset_loc=zarr_path,
             output_path=output_path,
             resolution_zyx=zyx_voxel_size,
-            n_lvls=6,
+            n_lvls=n_lvls,
             driver=driver,
+            qc_dir=qc_dir,
+            flats_dir=flats_dir,
         )
 
 
